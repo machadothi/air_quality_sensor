@@ -90,6 +90,7 @@ class Ble:
         ((self.h_env, self.h_info, self.h_command, self.h_name, self.h_display, self.h_air, self.h_system),) = \
             self.ble.gatts_register_services((_SERVICE,))
         self.ble.gatts_set_buffer(self.h_name, NAME_MAX)
+        self.ble.gatts_set_buffer(self.h_display, 6)
         self.ble.irq(self._irq)
         self.connection = None
         self.pending = []          # writes from the IRQ, handled in poll()
@@ -185,8 +186,9 @@ class Ble:
         mask = 0
         for page in cfg["pages"]:
             mask |= PAGE_BITS.get(page, 0)
+        # 6 bytes: the Thunderboard's 5 plus flags (bit 0: rotated 180°).
         self.ble.gatts_write(self.h_display, struct.pack(
-            "<BHH", 1 if self.app.display else 0, mask, int(cfg["page_s"] * 1000)))
+            "<BHHB", 1 if self.app.display else 0, mask, int(cfg["page_s"] * 1000), 1 if cfg["rotate"] else 0))
 
     # --- advertising ------------------------------------------------------------
 
@@ -266,9 +268,13 @@ class Ble:
         elif handle == self.h_display:
             # A rejected write can't be refused over the air from MicroPython:
             # the old value is written back, and the app sees it on its next read.
-            if len(value) == 5:
-                _, mask, page_ms = struct.unpack("<BHH", value)
+            if len(value) in (5, 6):
+                _, mask, page_ms = struct.unpack("<BHH", value[:5])
                 cfg = app.cfg["display"]
+                if len(value) == 6:   # flags; a 5-byte write leaves the rotation alone
+                    cfg["rotate"] = bool(value[5] & 1)
+                    if app.display:
+                        app.display.set_rotate(cfg["rotate"])
                 # The mask has no order: keep the current order, append new pages.
                 chosen = [p for p in cfg["pages"] if PAGE_BITS[p] & mask] + \
                     [p for p in _PAGE_ORDER if PAGE_BITS[p] & mask and p not in cfg["pages"]]
@@ -277,5 +283,5 @@ class Ble:
                     if app.display:
                         app.display.set_pages(chosen)
                     app.save_settings()
-                    print("Bluetooth: display", chosen, "every", page_ms, "ms")
+                    print("Bluetooth: display", chosen, "every", page_ms, "ms, rotated:", cfg["rotate"])
             self.write_display()

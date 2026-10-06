@@ -152,7 +152,8 @@ class App:
         timing, Bluetooth name) in settings.json; config.json stays untouched."""
         display, bt = self.cfg["display"], self.cfg["bluetooth"]
         with open(SETTINGS_FILE, "w") as f:
-            json.dump({"display": {"pages": display["pages"], "page_s": display["page_s"]},
+            json.dump({"display": {"pages": display["pages"], "page_s": display["page_s"],
+                                   "rotate": display["rotate"]},
                        "bluetooth": {"name": bt["name"]}}, f)
 
     def factory_reset(self):

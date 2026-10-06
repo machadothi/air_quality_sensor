@@ -83,10 +83,14 @@ class Display:
             time.sleep_ms(10)
         self.oled = ssd1306.SSD1306_I2C(W, H, i2c, addr=cfg["address"])
         self.oled.contrast(cfg["contrast"])
-        # The driver's rotate(True) is the normal orientation (what its init sets).
-        self.oled.rotate(not cfg["rotate"])
+        self.set_rotate(cfg["rotate"])
         self.back = framebuf.FrameBuffer(bytearray(W * H // 8), W, H, framebuf.MONO_VLSB)
         self.set_pages(cfg["pages"])
+
+    def set_rotate(self, rotate):
+        """Turn the picture 180° (True) or back. The driver's rotate(True) is
+        its normal orientation, the one its init sets; hence the "not"."""
+        self.oled.rotate(not rotate)
 
     def set_pages(self, pages):
         """Show these pages, in this order (unknown names are ignored)."""

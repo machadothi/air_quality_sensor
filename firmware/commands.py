@@ -7,7 +7,7 @@ import time
 from app import PAGE_NAMES   # already loaded, costs nothing
 
 REQUESTS = ("/read_all", "/status", "/display", "/display/next", "/topics", "/reboot")
-_DISPLAY_USAGE = '/display {"pages": [...], "page_s": 1-60}'
+_DISPLAY_USAGE = '/display {"pages": [...], "page_s": 1-60, "rotate": true/false}'
 
 
 def _display(app, text):
@@ -23,17 +23,20 @@ def _display(app, text):
             return {"error": _DISPLAY_USAGE}
         pages = change.get("pages", cfg["pages"])
         page_s = change.get("page_s", cfg["page_s"])
+        rotate = change.get("rotate", cfg["rotate"])
         if (not isinstance(pages, list) or not pages or [p for p in pages if p not in PAGE_NAMES]
-                or not isinstance(page_s, (int, float)) or not 1 <= page_s <= 60):
+                or not isinstance(page_s, (int, float)) or not 1 <= page_s <= 60
+                or not isinstance(rotate, bool)):
             return {"error": _DISPLAY_USAGE, "available": PAGE_NAMES}
-        cfg["pages"], cfg["page_s"] = pages, page_s
+        cfg["pages"], cfg["page_s"], cfg["rotate"] = pages, page_s, rotate
         if app.display:
             app.display.set_pages(pages)
+            app.display.set_rotate(rotate)
         app.save_settings()
         if app.ble:
             app.ble.write_display()   # keep the Bluetooth Display value in step
         print("Display:", pages, "every", page_s, "s")
-    return {"present": app.display is not None, "pages": cfg["pages"], "page_s": cfg["page_s"],
+    return {"present": app.display is not None, "pages": cfg["pages"], "page_s": cfg["page_s"], "rotate": cfg["rotate"],
             "available": PAGE_NAMES}
 
 

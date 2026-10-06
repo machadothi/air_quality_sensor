@@ -75,7 +75,7 @@ Publish the text to the request topic; the JSON answer comes on the response top
 | `/read_all` | current (not averaged) readings, same keys as above |
 | `/status` | `ip`, `wifi`, `wifi_rssi`, `mqtt`, `bluetooth`, `uptime_s`, `free_ram`, `lowest_free_ram`, `cpu_mhz`, `reset_cause`, `micropython`, `chip_temperature` (ESP32), `sensor_state`, `sensor_errors`, `sensor_integrity_errors`, `ens160_firmware`, `humid_s` |
 | `/display` | `{"present": true, "pages": [...], "page_s": 5, "available": [...]}` |
-| `/display {"pages": [...], "page_s": 8}` | changes the pages (order counts) and/or seconds per page (1–60); either key may be left out; stored in `settings.json`; answers like `/display`, or with `error` |
+| `/display {"pages": [...], "page_s": 8, "rotate": true}` | changes the pages (order counts), seconds per page (1–60) and/or the 180° rotation; any key may be left out; stored in `settings.json`; answers like `/display`, or with `error` |
 | `/display/next` | moves the display to the next page; answers the page name |
 | `/topics` | the topics in use and the accepted requests |
 | `/reboot` | answers, then restarts the board after 1 s |
@@ -163,7 +163,7 @@ topic_sub, topic_pub) are required; the rest falls back to
 | `display.address` | 0x3C (60) | OLED I2C address |
 | `display.page_s` | 5 | seconds per page |
 | `display.contrast` | 255 | brightness 0–255 |
-| `display.rotate` | false | true = upside down |
+| `display.rotate` | false | true = turned 180°; also settable from the app or `/display` (then stored in `settings.json`) |
 | `display.pages` | all | order and choice of `air`, `eco2`, `tvoc`, `temperature`, `humidity`, and on the ESP32 `dewpoint`, `sensor`, `system` |
 
 The older firmware's `"devices": {"display": false}` still turns the display off.

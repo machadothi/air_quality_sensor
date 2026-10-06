@@ -47,7 +47,7 @@ and their layouts match the Thunderboard firmware's `ble_protocol.h`.
 | 06 | Info | read | 4 | protocol version `1`, board id `0x0C`, sensors `0x41` (bit 0 temperature/humidity, bit 6 air quality), reserved |
 | 07 | Command | write | 1 | `0x02` factory reset, `0x03` reboot, `0x04` identify (the display flashes for 3 s) |
 | 08 | Name | read, write | ≤ 20 | UTF-8; stored, advertised from the next advertising round |
-| 09 | Display | read, write | 5 | `present` (u8), `page_mask` (u16), `page_ms` (u16, 1000–60000) |
+| 09 | Display | read, write | 6 | `present` (u8), `page_mask` (u16), `page_ms` (u16, 1000–60000), `flags` (u8, bit 0 = rotated 180°). A 5-byte write (Thunderboard clients) leaves the rotation as it is. |
 | 0A | **Air** | read, notify (every 2 s) | 22 | see below |
 | 0B | **System** | read, notify (every 5 s) | 32 | the ESP32 itself, see below |
 

@@ -288,7 +288,9 @@ preview.
 below y = 15. Add it to `_PAGES`, and add its name to `display.pages` (and to
 the app's list of pages).
 
-**Upside down / dimmer / brighter.** `display.rotate`, `display.contrast`
+**Upside down / dimmer / brighter.** In the app: Settings → Display → Upside
+down (ESP32), or `/display {"rotate": true}` over MQTT; in `config.json`:
+`display.rotate`, `display.contrast`
 (0–255; 255 is the brightest the SSD1306 does) in `config.json`.
 
 **Burn-in.** OLEDs age where pixels are lit most. Rotating pages helps; lower

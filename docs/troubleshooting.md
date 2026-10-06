@@ -11,7 +11,7 @@ reset the board (`Ctrl+D` in the REPL, or the reset button). Ctrl+] leaves.
 | `MemoryError` at start | a `.py` copy of a module is being compiled on the board, or new code grew too big. `tools/deploy.sh` removes stale `.py` files; see [architecture.md](architecture.md#ram-budget) |
 | Display says **No sensor** | wiring; check the I2C scan in [hardware.md](hardware.md#checking-the-wiring) |
 | Display blank, log says `Display not found` | OLED wiring or address; try `"display": {"address": 61}` (0x3D). A 7-pin 2.42" module also needs RES on GPIO4, DC and CS on GND, and I2C mode set on its back; see [hardware.md](hardware.md#wiring-esp32) |
-| Display upside down | `"display": {"rotate": true}` |
+| Display upside down | app: Settings → Display → Upside down; or `/display {"rotate": true}` over MQTT; or `"display": {"rotate": true}` in config.json |
 | **Warming up** for more than 3 min | a new ENS160 has a one-time 1-hour start-up, then settles for a day |
 | Temperature 1–3 °C too high | ENS160 heater; set `sensor.temperature_offset`, see [sensors.md](sensors.md#temperature-offset) |
 | `MQTT: failed (5)` | broker refused: wrong user/password |
