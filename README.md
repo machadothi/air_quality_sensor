@@ -36,7 +36,14 @@ tools/deploy.sh --config                                 # compile, upload, rest
 .venv/bin/mpremote connect /dev/ttyUSB0 repl             # watch the log (Ctrl+] quits)
 ```
 
-For a board without MicroPython, or full details, see [docs/setup.md](docs/setup.md).
+Phone app:
+
+```sh
+cd android && ./gradlew assembleDebug && ~/Android/Sdk/platform-tools/adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+For a board without MicroPython, the Android SDK, or full details, see
+[docs/setup.md](docs/setup.md).
 
 ## Documentation
 

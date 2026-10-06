@@ -1,6 +1,15 @@
 # Setup
 
-From an empty board to a running air monitor.
+From an empty board to a running air monitor, and the phone app.
+
+- [Downloads](#downloads)
+- [1. PC tools](#1-pc-tools)
+- [2. MicroPython](#2-micropython-new-or-wiped-board-only)
+- [3. Configuration](#3-configuration)
+- [4. Deploy](#4-deploy)
+- [5. Check it runs](#5-check-it-runs)
+- [6. Phone app (optional)](#6-phone-app-optional)
+- [Everyday commands](#everyday-commands)
 
 ## Downloads
 
@@ -14,6 +23,10 @@ From an empty board to a running air monitor.
 | Pillow | `requirements.txt` | generate fonts/icons, previews, screenshots |
 | DejaVu fonts | `sudo apt install fonts-dejavu-core` | only for `tools/make_assets.py` |
 | USB-serial driver | in Linux already (CH340 / CP210x) | the board appears as `/dev/ttyUSB0` |
+| Temurin JDK 21 | <https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse> | phone app only: runs Gradle and `sdkmanager` |
+| Android SDK command-line tools | <https://dl.google.com/android/repository/commandlinetools-linux-16111833_latest.zip> (newest: <https://developer.android.com/studio#command-line-tools-only>) | phone app only: `sdkmanager` |
+| Android platform 37.2, build-tools 37.0.0, platform-tools (`adb`) | installed by `sdkmanager` from Google | phone app only |
+| Gradle 9.8 and the app's libraries | downloaded automatically by `./gradlew` on the first build | phone app only |
 
 If you change the MicroPython version, use the matching mpy-cross
 (`pip install 'mpy-cross==<version>.*'`). A mismatch shows up as
@@ -85,6 +98,51 @@ Running
 
 Ctrl+C stops the program (back to `>>>`), Ctrl+] leaves mpremote. To start
 it again: `import app; app.run()` or `.venv/bin/mpremote connect /dev/ttyUSB0 reset`.
+
+## 6. Phone app (optional)
+
+The app in `android/` is described in [android-app.md](android-app.md). It
+needs a JDK and the Android SDK, both installed **outside the repo** in
+`~/Android/` (Android Studio uses the same SDK location; skip what you
+already have).
+
+```sh
+# 1. JDK 21 (runs Gradle and sdkmanager)
+mkdir -p ~/Android/jdk && cd ~/Android
+wget -O jdk.tar.gz 'https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse'
+tar xzf jdk.tar.gz -C jdk --strip-components=1 && rm jdk.tar.gz
+export JAVA_HOME=~/Android/jdk
+
+# 2. Android SDK command-line tools (contain sdkmanager)
+mkdir -p ~/Android/Sdk/cmdline-tools && cd ~/Android/Sdk/cmdline-tools
+wget -O tools.zip https://dl.google.com/android/repository/commandlinetools-linux-16111833_latest.zip
+unzip -q tools.zip && mv cmdline-tools latest && rm tools.zip
+
+# 3. The SDK parts the app needs
+yes | ~/Android/Sdk/cmdline-tools/latest/bin/sdkmanager --licenses
+~/Android/Sdk/cmdline-tools/latest/bin/sdkmanager "platforms;android-37.2" "build-tools;37.0.0" "platform-tools"
+
+# 4. Tell Gradle where the SDK is (git-ignored file)
+echo "sdk.dir=$HOME/Android/Sdk" > ~/git/air_quality_sensor/android/local.properties
+
+# 5. Build and test: the first run downloads Gradle and every library (a few minutes)
+cd ~/git/air_quality_sensor/android && ./gradlew assembleDebug testDebugUnitTest
+```
+
+**Installing on the phone over USB:**
+1. On the phone: Settings → About phone → tap **Build number** 7 times, then
+   Settings → System → Developer options → **USB debugging** on.
+2. On the PC, once: `sudo sh android/setup_adb_udev.sh`, then unplug and replug
+   the phone. It allows Google Pixel phones (USB vendor 18d1); for another
+   brand, change `idVendor` in the script (`lsusb` shows it).
+3. Accept **Allow USB debugging?** on the phone ("Always allow").
+4. Install:
+   ```sh
+   ~/Android/Sdk/platform-tools/adb devices        # must say "device", not "unauthorized"
+   ~/Android/Sdk/platform-tools/adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+   ```
+
+Then follow [android-app.md → First start](android-app.md#first-start).
 
 ## Everyday commands
 

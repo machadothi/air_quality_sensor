@@ -1,5 +1,5 @@
-# Same stack and versions as the BLE Sensor app (~/git/BLE_Sensor/android),
-# latest stable as of 2026-10, plus MQTT (Paho) and DataStore.
+# Compose, Material 3, Hilt, Navigation, MQTT (Paho) and DataStore,
+# at the latest stable versions as of 2026-10.
 [versions]
 agp = "9.4.1"
 kotlin = "2.4.20"

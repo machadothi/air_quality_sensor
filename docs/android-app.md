@@ -26,14 +26,15 @@ failed), then the board (online / offline / "updated 12 s ago").
 
 ## Build and install
 
-Same toolchain as the BLE Sensor app (`~/git/BLE_Sensor/android`): Android
-SDK in `~/Android/Sdk`, JDK 21. The Gradle wrapper downloads Gradle 9.8 and all
-libraries on the first build.
+Needs JDK 21 and the Android SDK in `~/Android/`. The downloads, the
+`sdkmanager` commands and the phone's USB setup are in
+[setup.md → Phone app](setup.md#6-phone-app-optional). The Gradle wrapper
+downloads Gradle 9.8 and all libraries on the first build.
 
 ```sh
 cd android
-export JAVA_HOME=~/git/BLE_Sensor/tools/jdk        # or any JDK 21
-./gradlew assembleDebug testDebugUnitTest
+export JAVA_HOME=~/Android/jdk                     # any JDK 17+ works
+./gradlew assembleDebug testDebugUnitTest          # -> app/build/outputs/apk/debug/app-debug.apk
 ~/Android/Sdk/platform-tools/adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
@@ -104,8 +105,8 @@ The protocol itself is described in [communication.md](communication.md).
 | `data/AirRepository.kt` | single source of truth: readings, history, status, display, online/offline, events |
 | `ui/screen/connect/` | the Connect screen and its ViewModel |
 | `ui/screen/monitor/` | `MonitorScreen` (top bar, tabs), `LiveTab` (gauge, cards), `DisplayTab` (pages, preview), `DeviceTab`; `MonitorViewModel` (polling) |
-| `ui/components/` | shared with the BLE Sensor app: `GlowCard`, `AnimatedNumber`, `Sparkline`, `SignalBars`, `AppSwitch`, `LabeledSlider` |
-| `ui/theme/` | the same dark instrument-panel theme |
+| `ui/components/` | reusable pieces: `GlowCard`, `AnimatedNumber`, `Sparkline`, `SignalBars`, `AppSwitch`, `LabeledSlider` |
+| `ui/theme/` | the dark "instrument panel" theme |
 
 Tests: `android/app/src/test/.../AirProtocolTest.kt` parses messages exactly
 as the board sends them and checks the `/display` request format.
