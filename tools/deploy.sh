@@ -16,10 +16,10 @@ PORT="${PORT:-/dev/ttyUSB0}"
 BIN="${VENV:-$ROOT/.venv}/bin"
 MPREMOTE="$BIN/mpremote"
 MPY_CROSS="$BIN/mpy-cross"
-MODULES=(app net sensors ui gfx assets commands home_assistant ble)
+MODULES=(app net sensors ui ui_more gfx assets commands home_assistant ble)
 # Files of the old firmware (esp_manager.py and friends) and stale sources,
 # which would be imported instead of the .mpy files.
-STALE=(esp_manager.py sensor_reader.py modules app.py net.py sensors.py ui.py gfx.py assets.py commands.py home_assistant.py ble.py)
+STALE=(esp_manager.py sensor_reader.py modules app.py net.py sensors.py ui.py gfx.py assets.py commands.py home_assistant.py ble.py ui_more.py)
 
 [ -x "$MPREMOTE" ] && [ -x "$MPY_CROSS" ] || { echo "Missing mpremote/mpy-cross in $BIN, see the top of $0"; exit 1; }
 

@@ -47,13 +47,16 @@ MQTT 3.1.1 via `umqtt.simple`, QoS 0, keepalive 60 s (pinged every 30 s).
 ### Readings
 
 ```json
-{"temperature": 22.4, "humidity": 48.6, "eco2": 812, "tvoc": 164, "aqi": 2, "state": "normal", "status": 129}
+{"temperature": 22.4, "humidity": 48.6, "dew_point": 11.2, "absolute_humidity": 9.6,
+ "eco2": 812, "tvoc": 164, "aqi": 2, "state": "normal", "status": 129}
 ```
 
 | Key | Unit | Notes |
 |---|---|---|
 | `temperature` | °C | 1 decimal, offset applied |
 | `humidity` | % RH | 1 decimal |
+| `dew_point` | °C | from temperature and humidity ([sensors.md](sensors.md#derived-values)) |
+| `absolute_humidity` | g/m³ | same |
 | `eco2` | ppm | equivalent CO2, estimated from VOCs (not an NDIR CO2 sensor); `null` until the ENS160 is ready |
 | `tvoc` | ppb | total volatile organic compounds; `null` until ready |
 | `aqi` | 1–5 | UBA scale: 1 excellent, 2 good, 3 moderate, 4 poor, 5 unhealthy; `null` until ready |
@@ -70,7 +73,7 @@ Publish the text to the request topic; the JSON answer comes on the response top
 | Request | Answer |
 |---|---|
 | `/read_all` | current (not averaged) readings, same keys as above |
-| `/status` | `ip`, `wifi_rssi`, `uptime_s`, `free_ram`, `lowest_free_ram`, `sensor_errors`, `sensor_state` |
+| `/status` | `ip`, `wifi`, `wifi_rssi`, `mqtt`, `bluetooth`, `uptime_s`, `free_ram`, `lowest_free_ram`, `cpu_mhz`, `reset_cause`, `micropython`, `chip_temperature` (ESP32), `sensor_state`, `sensor_errors`, `sensor_integrity_errors`, `ens160_firmware`, `humid_s` |
 | `/display` | `{"present": true, "pages": [...], "page_s": 5, "available": [...]}` |
 | `/display {"pages": [...], "page_s": 8}` | changes the pages (order counts) and/or seconds per page (1–60); either key may be left out; stored in `settings.json`; answers like `/display`, or with `error` |
 | `/display/next` | moves the display to the next page; answers the page name |
@@ -99,6 +102,8 @@ with these entities:
 | eCO2 | carbon_dioxide | ppm |
 | TVOC | volatile_organic_compounds_parts | ppb |
 | Air quality index | aqi | |
+| Dew point | temperature | °C |
+| Absolute humidity | absolute_humidity | g/m³ |
 | Sensor state (diagnostic) | | |
 
 All of them show "unavailable" when the board is offline (availability topic).
@@ -159,7 +164,7 @@ topic_sub, topic_pub) are required; the rest falls back to
 | `display.page_s` | 5 | seconds per page |
 | `display.contrast` | 255 | brightness 0–255 |
 | `display.rotate` | false | true = upside down |
-| `display.pages` | all | order and choice of `air`, `eco2`, `tvoc`, `temperature`, `humidity` |
+| `display.pages` | all | order and choice of `air`, `eco2`, `tvoc`, `temperature`, `humidity`, and on the ESP32 `dewpoint`, `sensor`, `system` |
 
 The older firmware's `"devices": {"display": false}` still turns the display off.
 Display choices sent with `/display` are stored in `settings.json` on the board

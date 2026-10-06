@@ -16,6 +16,8 @@ _SENSORS = (
     ("eco2", "eCO2", "ppm", "carbon_dioxide"),
     ("tvoc", "TVOC", "ppb", "volatile_organic_compounds_parts"),
     ("aqi", "Air quality index", None, "aqi"),
+    ("dew_point", "Dew point", "°C", "temperature"),
+    ("absolute_humidity", "Absolute humidity", "g/m³", "absolute_humidity"),
 )
 
 

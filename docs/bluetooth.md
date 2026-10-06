@@ -48,7 +48,8 @@ and their layouts match the Thunderboard firmware's `ble_protocol.h`.
 | 07 | Command | write | 1 | `0x02` factory reset, `0x03` reboot, `0x04` identify (the display flashes for 3 s) |
 | 08 | Name | read, write | ≤ 20 | UTF-8; stored, advertised from the next advertising round |
 | 09 | Display | read, write | 5 | `present` (u8), `page_mask` (u16), `page_ms` (u16, 1000–60000) |
-| 0A | **Air** | read, notify (every 2 s) | 10 | see below |
+| 0A | **Air** | read, notify (every 2 s) | 22 | see below |
+| 0B | **System** | read, notify (every 5 s) | 32 | the ESP32 itself, see below |
 
 **Air** (new for this board):
 
@@ -59,10 +60,38 @@ and their layouts match the Thunderboard firmware's `ble_protocol.h`.
 | 5 | u8 | AQI 1–5 (UBA), 0 when not normal |
 | 6 | u16 | eCO2, ppm, 0 when not normal |
 | 8 | u16 | TVOC, ppb, 0 when not normal |
+| 10 | u8 | raw DEVICE_STATUS register |
+| 11 | 3 × u8 | ENS160 firmware: major, minor, release |
+| 14 | u16 | raw resistance R1 (ohms = 2^(raw/2048)), 0 = none yet |
+| 16 | u16 | raw resistance R4 |
+| 18 | i16 | compensation temperature the ENS160 uses, °C × 100 (`0x7FFF` = none yet) |
+| 20 | u16 | compensation humidity, % × 100 |
+
+The first 10 bytes are the original layout, so a client that reads only those
+still works.
+
+**System** (the ESP32):
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | u32 | uptime, s |
+| 4 | u32 | free RAM, bytes |
+| 8 | i16 | chip temperature, °C × 100 (die temperature, uncalibrated; `0x7FFF` = n/a) |
+| 10 | i8 | Wi-Fi RSSI, dBm (0 = not connected) |
+| 11 | u8 | flags: bit 0 Wi-Fi, bit 1 MQTT, bit 2 Bluetooth connected |
+| 12 | 4 × u8 | IP address |
+| 16 | u16 | CPU, MHz |
+| 18 | u8 | last reset: 1 power on, 2 reset pin/USB, 3 watchdog, 4 deep sleep, 5 software |
+| 19 | 3 × u8 | MicroPython version |
+| 22 | u16 | sensor errors (a sensor stopped answering) |
+| 24 | u16 | ENS160 checksum errors |
+| 26 | u32 | seconds the AHT21 spent above 80 %RH since start |
+| 30 | u16 | reserved |
 
 **Display page bits** (`page_mask`): bit 0 temperature, bit 1 humidity,
-bit 10 air quality, bit 11 eCO2, bit 12 TVOC. Bits 0–9 are the same as on
-the Thunderboard; bits 10–12 are this board's pages.
+bit 10 air quality, bit 11 eCO2, bit 12 TVOC, bit 13 dew point, bit 14 air
+sensor details, bit 15 system. Bits 0–9 are the same as on the Thunderboard;
+bits 10–15 are this board's pages.
 - **Order is kept.** A mask has no order: the pages you keep stay in their
   current order, newly enabled ones are added at the end. The order itself can
   be changed over MQTT (`/display`).
@@ -83,11 +112,11 @@ services; confirm it once. Objects sent:
 | `0x00` packet id | changes every packet, so Home Assistant ignores repeats |
 | `0x02` temperature | 0.01 °C |
 | `0x03` humidity | 0.01 % |
+| `0x08` dew point | 0.01 °C |
 | `0x12` CO2 | ppm (the ENS160's eCO2), only when the sensor is ready |
+| `0x13` TVOC | µg/m³, ethanol-equivalent (see [sensors.md](sensors.md#ratings)), only when ready |
 
-TVOC is not sent: BTHome only has TVOC in µg/m³, and the ENS160 gives ppb
-without saying which gas. The air-quality index has no BTHome type either. Both
-are available over MQTT.
+The air-quality index has no BTHome type; it's available over MQTT.
 
 If you already use the MQTT readings in Home Assistant, you'll have
 temperature and humidity twice. Either ignore the BTHome device, or turn it

@@ -24,6 +24,7 @@ from PIL import Image  # noqa: E402
 
 import ssd1306  # noqa: E402  (the stand-in)
 import ui  # noqa: E402
+import ui_more  # noqa: E402  (the ESP32's extra pages)
 
 SCALE = 4
 
@@ -48,6 +49,12 @@ class FakeAir:
     eco2 = 812
     tvoc = 164
     aqi = 2
+    validity = 0
+    firmware = (5, 4, 6)
+    r1_raw = 43478    # 2.4 MΩ
+    r4_raw = 31276    # 39 kΩ
+    comp_t = 22.4
+    comp_rh = 48.6
 
     def warmup_left_s(self):
         return 104, 180
@@ -64,14 +71,23 @@ class FakeNet:
         return "192.168.1.42"
 
 
+class FakeApp:
+    """What the system page needs from app.App."""
+    ble = None
+
+    def uptime_s(self):
+        return 2 * 3600 + 13 * 60
+
+
 def main():
     out = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / "preview"
     out.mkdir(exist_ok=True)
     frames = []
     ssd1306.on_show = lambda fb: frames.append(to_image(fb))
 
+    ui_more.register(ui, FakeApp())
     cfg = {"address": 0x3C, "contrast": 255, "rotate": False,
-           "pages": ["air", "eco2", "tvoc", "temperature", "humidity"]}
+           "pages": ["air", "eco2", "tvoc", "temperature", "humidity", "dewpoint", "sensor", "system"]}
     display = ui.Display(None, cfg)
     air, net, history = FakeAir(), FakeNet(), ui.History()
     for minute in range(ui.HISTORY_POINTS):
@@ -98,8 +114,8 @@ def main():
     air.valid = False
     save("11_air_warming_up")
     net.wifi_ok = net.mqtt_ok = False
-    display.index = 3
-    save("12_temperature_offline")
+    display.index = 7
+    save("12_system_offline")
     air.has_air = air.valid = False
     display.index = 0
     save("13_air_no_sensor")

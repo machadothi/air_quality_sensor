@@ -1,7 +1,6 @@
 # MQTT requests: send the text to the request topic (esp/<client_id>/request),
 # the JSON answer arrives on the response topic (esp/<client_id>/response).
 # app.py loads this module per request and drops it again, to save RAM.
-import gc
 import json
 import time
 
@@ -43,9 +42,12 @@ def handle(app, text):
     if text in ("/read", "/read_all", "/read/air_quality_sensor"):
         return app.state_message()
     if text == "/status":
-        return {"ip": net.ip(), "wifi_rssi": net.rssi(), "uptime_s": time.time() - app.boot_s,
-                "free_ram": gc.mem_free(), "lowest_free_ram": app.min_free,
-                "sensor_errors": app.air.errors, "sensor_state": app.sensor_state()}
+        status = app.system_info()
+        air = app.air
+        status.update({"lowest_free_ram": app.min_free, "sensor_errors": air.errors,
+                       "sensor_integrity_errors": air.integrity_errors, "sensor_state": app.sensor_state(),
+                       "ens160_firmware": air.firmware, "humid_s": air.humid_s})
+        return status
     if text == "/display" or text.startswith("/display {"):
         return _display(app, text)
     if text == "/display/next" and app.display:

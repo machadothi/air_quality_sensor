@@ -22,16 +22,26 @@ processor. From the gas readings it calculates:
 | 0x00–0x01 | PART_ID | must read 0x0160, else "not found" |
 | 0x10 | OPMODE | 0xF0 reset → 0x01 idle → 0x02 standard (measuring) |
 | 0x11 | CONFIG | 0x00: no interrupt pin |
-| 0x12 | COMMAND | 0xCC: clear the general-purpose registers |
+| 0x12 | COMMAND | 0xCC: clear the general-purpose registers; 0x0E: firmware version (idle mode only) |
 | 0x13–0x16 | TEMP_IN, RH_IN | compensation: `(T + 273.15) × 64` and `RH × 512`, little-endian |
 | 0x20 | DEVICE_STATUS | bit 7 running, bit 6 error, bits 3:2 validity, bit 1 new data |
 | 0x21–0x25 | DATA_AQI, DATA_TVOC, DATA_ECO2 | read in one 5-byte burst |
+| 0x30–0x33 | DATA_T, DATA_RH | the compensation the sensor actually uses; read every 10 s |
+| 0x38 | DATA_MISR | checksum of the bytes read, see [Integrity check](#integrity-check) |
+| 0x48–0x4F | GPR_READ | after 0x0E: firmware version (bytes 4–6); while measuring: raw resistances R1 (bytes 0–1), R4 (bytes 6–7) |
 
-### Start-up sequence (`AirSensor._connect`)
+### Start-up sequence (`AirSensor._connect_ens`)
 
-Check PART_ID → reset → idle → clear CONFIG → clear GPR → standard mode. The
-reset matters because the old firmware had written to the wrong registers
-(see [Changes from the old firmware](#changes-from-the-old-firmware)).
+- **Cold start** (the sensor is idle after power-on): check PART_ID → reset →
+  idle → clear CONFIG → clear GPR → read the **firmware version** (only possible
+  in idle mode) → standard mode. The 3-minute warm-up follows.
+- **Warm start** (the ESP restarted, but the sensor kept measuring): leave it
+  alone. A reset would start the 3-minute warm-up again for nothing
+  (datasheet 10.2). The firmware version comes from the ESP's RTC memory,
+  where the cold start saved it.
+
+The log says which: `ENS160 found, firmware 5.4.6` or `ENS160 found, still
+running, firmware 5.4.6`.
 
 ### Validity: warm-up
 
@@ -53,6 +63,39 @@ treats "not running" as warm-up, so those zeros are never published.
 The gas readings depend on temperature and humidity. By default the ENS160
 assumes 25 °C / 50 %. After each AHT21 reading, the firmware writes the real
 values to TEMP_IN/RH_IN, so the ENS160 calculates with actual conditions.
+DATA_T/DATA_RH read them back ("Uses" on the sensor page, "Compensation in
+use" in the app): they should match the temperature and humidity shown.
+
+### Raw resistances
+
+The ENS160 has four metal-oxide elements; for two of them (1 and 4) it reports
+the raw resistance, `R = 2^(raw / 2048)` Ω (datasheet section 7). They swing
+widely, by design: the elements' heaters run in cycles. They're shown for
+insight; the calibrated outputs are AQI, TVOC and eCO2.
+
+### Integrity check
+
+Every value read over I2C also feeds a running checksum in the sensor
+(DATA_MISR, CRC with polynomial 0x1D, datasheet 16.2.14). The firmware keeps
+its own copy and compares after each reading; a mismatch means a byte was
+corrupted on the bus, so that reading is dropped and counted ("checksum
+errors"). The datasheet says only registers 0x20–0x37 count; measured on a real
+ENS160 (firmware 5.4.6), **every** read does, so the firmware counts all of them.
+
+### Ratings
+
+| eCO2 (ppm) | Rating (datasheet table 5) | | AQI (UBA) | TVOC (ppb) | Rating |
+|---|---|---|---|---|---|
+| 400–600 | excellent | | 1 | 0–65 | excellent |
+| 600–800 | good | | 2 | 65–220 | good |
+| 800–1000 | fair: ventilation optional | | 3 | 220–660 | moderate |
+| 1000–1500 | poor: ventilate | | 4 | 660–2200 | poor |
+| > 1500 | bad: ventilation required | | 5 | 2200–5500 | unhealthy |
+
+**TVOC in µg/m³.** The ENS160's TVOC is ethanol-calibrated (its DATA_ETOH
+register mirrors DATA_TVOC), so `µg/m³ = ppb × 46.07 / molar volume`, with the
+molar volume at the current temperature (24.5 L at 25 °C). That's what BTHome
+sends and the app shows.
 
 ## AHT21 — temperature and humidity (I2C 0x38)
 
@@ -70,6 +113,27 @@ values to TEMP_IN/RH_IN, so the ENS160 calculates with actual conditions.
 - **Every 2 s, not faster.** The datasheet warns that more frequent
   measurements heat the sensor itself.
 - Conversion: `RH = raw × 100 / 2²⁰`, `T = raw × 200 / 2²⁰ − 50`.
+
+### Accuracy and drift (datasheet)
+
+- **Accuracy:** typically ±0.3 °C and ±2 %RH (25 °C, 20–80 %RH); up to
+  ±5–7 %RH at the extremes.
+- **Self-heating:** measure no more than once per second. The firmware
+  measures every 2 s.
+- **Drift:** more than 60 hours above 80 %RH make it read up to +3 %RH high,
+  until it slowly recovers in normal air. The firmware counts the time above
+  80 %RH ("Time above 80 %RH" in the app, `humid_s` in `/status`). Faster
+  recovery (datasheet 4.3): 60–85 °C, below 5 %RH, for 2–10 hours.
+
+## Derived values
+
+From temperature and humidity, both in the firmware and in the app:
+
+| Value | Formula |
+|---|---|
+| Dew point | Magnus: `γ = ln(RH/100) + 17.62·T/(243.12+T)`, `Td = 243.12·γ / (17.62−γ)` |
+| Absolute humidity | `216.7 · RH/100 · 6.112·e^(17.62·T/(243.12+T)) / (273.15+T)` g/m³ |
+| Comfort | from the dew point: < 5 °C dry, < 13 pleasant, < 16 humid, < 19 very humid, above that muggy |
 
 ## Temperature offset
 

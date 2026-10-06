@@ -8,7 +8,7 @@
 #   app packet:    flags | 128-bit service UUID | manufacturer data
 #                  (company 0x02FF, board id 0x0C, protocol version)
 #   BTHome packet: flags | service data 0xFCD2: packet id, temperature,
-#                  humidity, CO2
+#                  humidity, dew point, CO2, TVOC
 # The scan response carries the name. While a phone is connected, only the
 # BTHome packet goes out (not connectable), so Home Assistant keeps getting data.
 import struct
@@ -16,6 +16,8 @@ import time
 
 import bluetooth
 from micropython import const
+
+import sensors
 
 _IRQ_CENTRAL_CONNECT = const(1)
 _IRQ_CENTRAL_DISCONNECT = const(2)
@@ -42,14 +44,17 @@ PAGE_MS_MIN = const(1000)
 PAGE_MS_MAX = const(60000)
 
 # Display.page_mask bits shared with the Thunderboard; 10-12 are this board's.
-PAGE_BITS = {"temperature": 1 << 0, "humidity": 1 << 1, "air": 1 << 10, "eco2": 1 << 11, "tvoc": 1 << 12}
-_PAGE_ORDER = ("air", "eco2", "tvoc", "temperature", "humidity")   # app.PAGE_NAMES
+PAGE_BITS = {"temperature": 1 << 0, "humidity": 1 << 1, "air": 1 << 10, "eco2": 1 << 11, "tvoc": 1 << 12,
+             "dewpoint": 1 << 13, "sensor": 1 << 14, "system": 1 << 15}
+_PAGE_ORDER = ("air", "eco2", "tvoc", "temperature", "humidity", "dewpoint", "sensor", "system")   # app.PAGE_NAMES
 
 # Air.state values: the ENS160 validity, or 0xFF without a sensor.
 _STATE_NO_SENSOR = const(0xFF)
 
 _ADV_SWITCH_MS = const(1000)
 _UPDATE_MS = const(2000)
+_SYSTEM_MS = const(5000)
+_NONE_I16 = const(0x7FFF)   # "no value" in signed 16-bit fields
 _ADV_INTERVAL_US = const(100000)
 
 
@@ -64,7 +69,8 @@ _COMMAND = (_uuid(0x07), _FLAG_WRITE)
 _NAME = (_uuid(0x08), _FLAG_READ | _FLAG_WRITE)
 _DISPLAY = (_uuid(0x09), _FLAG_READ | _FLAG_WRITE)
 _AIR = (_uuid(0x0A), _FLAG_READ | _FLAG_NOTIFY)
-_SERVICE = (_SERVICE_UUID, (_ENV, _INFO, _COMMAND, _NAME, _DISPLAY, _AIR))
+_SYSTEM = (_uuid(0x0B), _FLAG_READ | _FLAG_NOTIFY)
+_SERVICE = (_SERVICE_UUID, (_ENV, _INFO, _COMMAND, _NAME, _DISPLAY, _AIR, _SYSTEM))
 
 
 def _ad(ad_type, payload):
@@ -81,7 +87,7 @@ class Ble:
         self.name = cfg["name"] or "Air-Monitor-%02X%02X" % (mac[4], mac[5])
         self.bthome = cfg["bthome"]
         self.ble.config(gap_name=self.name)
-        ((self.h_env, self.h_info, self.h_command, self.h_name, self.h_display, self.h_air),) = \
+        ((self.h_env, self.h_info, self.h_command, self.h_name, self.h_display, self.h_air, self.h_system),) = \
             self.ble.gatts_register_services((_SERVICE,))
         self.ble.gatts_set_buffer(self.h_name, NAME_MAX)
         self.ble.irq(self._irq)
@@ -90,7 +96,7 @@ class Ble:
         self.packet_id = 0
         self.show_bthome = False
         self.identify_until = None
-        self._next_adv = self._next_update = time.ticks_ms()
+        self._next_adv = self._next_update = self._next_system = time.ticks_ms()
 
         self.ble.gatts_write(self.h_info, struct.pack("<BBBB", PROTOCOL_VERSION, BOARD_ID,
                                                       _SENSOR_RHT | _SENSOR_AIR, 0))
@@ -108,6 +114,9 @@ class Ble:
         if time.ticks_diff(now, self._next_update) >= 0:
             self._next_update = time.ticks_add(now, _UPDATE_MS)
             self._update_values(notify=self.connection is not None)
+        if time.ticks_diff(now, self._next_system) >= 0:
+            self._next_system = time.ticks_add(now, _SYSTEM_MS)
+            self._update_system(notify=self.connection is not None)
         if time.ticks_diff(now, self._next_adv) >= 0:
             self._next_adv = time.ticks_add(now, _ADV_SWITCH_MS)
             self._advertise()
@@ -136,16 +145,40 @@ class Ble:
         env = struct.pack("<IHhHIHiBhHh", uptime, valid, temperature, humidity, 0, 0, 0, 0, 0, 0, 0)
         state = _STATE_NO_SENSOR if air.validity is None else air.validity
         ok = air.valid
-        air_value = struct.pack("<IBBHH", uptime, state, air.aqi if ok else 0,
-                                air.eco2 if ok else 0, air.tvoc if ok else 0)
+        fw = air.firmware or (0, 0, 0)
+        # Air: the first 10 bytes are the original layout; details follow.
+        air_value = struct.pack(
+            "<IBBHHBBBBHHhH", uptime, state, air.aqi if ok else 0, air.eco2 if ok else 0, air.tvoc if ok else 0,
+            air.status or 0, fw[0], fw[1], fw[2], air.r1_raw or 0, air.r4_raw or 0,
+            _NONE_I16 if air.comp_t is None else int(air.comp_t * 100),
+            0 if air.comp_rh is None else int(air.comp_rh * 100))
         self.ble.gatts_write(self.h_env, env)
         self.ble.gatts_write(self.h_air, air_value)
         if notify:
-            for handle, value in ((self.h_env, env), (self.h_air, air_value)):
-                try:
-                    self.ble.gatts_notify(self.connection, handle, value)
-                except OSError:   # not subscribed yet, or just disconnected
-                    pass
+            self._notify(((self.h_env, env), (self.h_air, air_value)))
+
+    def _update_system(self, notify):
+        app, air = self.app, self.app.air
+        info = app.system_info()
+        ip = bytes(int(part) for part in info["ip"].split(".")) if info["ip"] else b"\0\0\0\0"
+        chip = info["chip_temperature"]
+        flags = (1 if info["wifi"] else 0) | (2 if info["mqtt"] else 0) | (4 if info["bluetooth"] else 0)
+        mp = info["micropython"]
+        value = struct.pack(
+            "<IIhbB4sHBBBBHHIH", info["uptime_s"], info["free_ram"],
+            _NONE_I16 if chip is None else int(chip * 100), info["wifi_rssi"] or 0, flags, ip,
+            info["cpu_mhz"], info["reset_cause"], mp[0], mp[1], mp[2],
+            min(air.errors, 0xFFFF), min(air.integrity_errors, 0xFFFF), air.humid_s, 0)
+        self.ble.gatts_write(self.h_system, value)
+        if notify:
+            self._notify(((self.h_system, value),))
+
+    def _notify(self, values):
+        for handle, value in values:
+            try:
+                self.ble.gatts_notify(self.connection, handle, value)
+            except OSError:   # not subscribed yet, or just disconnected
+                pass
 
     def write_display(self):
         cfg = self.app.cfg["display"]
@@ -170,8 +203,13 @@ class Ble:
             data += struct.pack("<Bh", 0x02, int(air.temperature * 100))
         if air.humidity is not None:
             data += struct.pack("<BH", 0x03, int(air.humidity * 100))
+        dew = sensors.dew_point(air.temperature, air.humidity)
+        if dew is not None:
+            data += struct.pack("<Bh", 0x08, int(dew * 100))
         if air.valid:
             data += struct.pack("<BH", 0x12, air.eco2)
+            # BTHome wants TVOC in µg/m³; the ENS160's is ethanol-calibrated (see sensors.tvoc_ugm3).
+            data += struct.pack("<BH", 0x13, min(0xFFFF, int(sensors.tvoc_ugm3(air.tvoc, air.temperature))))
         return _ad(0x01, b"\x06") + _ad(0x16, bytes(data))
 
     def _advertise(self):

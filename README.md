@@ -15,9 +15,15 @@ phone app, and as BTHome to Home Assistant.
 - **Air quality, eCO2, TVOC, temperature and humidity,** one page at a time,
   sliding every 5 s. Each page has big digits, an icon and a chart of the last
   hour. Which pages appear and for how long is set over MQTT (`/display`).
+- **Everything the sensors offer,** following their datasheets: dew point,
+  absolute humidity, the ENS160's raw resistances, firmware and the
+  compensation it uses, TVOC in µg/m³, eCO2 ratings, and the ESP32's own
+  status. All of it is in the app; each can be a display page.
 - **Accurate readings.** The ENS160 gets the real temperature and humidity as
-  compensation. Readings are only reported once its warm-up is done, and an
-  optional temperature offset corrects the combo board's self-heating.
+  compensation, every read is checked against the sensor's checksum, and an ESP
+  restart doesn't cost a new 3-minute warm-up. Readings count only once the
+  warm-up is done, and a temperature offset corrects the combo board's
+  self-heating.
 - **Bluetooth (ESP32):** the BLE Sensor phone app finds the board as "ESP32
   Air", shows its readings and sets its name and display pages. BTHome
   broadcasts reach Home Assistant without Wi-Fi.
@@ -76,6 +82,7 @@ firmware/                  everything that runs on the board (MicroPython)
   commands.py              MQTT requests            (loaded on demand)
   home_assistant.py        Home Assistant discovery (loaded on demand)
   ui.py, gfx.py            display pages, drawing helpers
+  ui_more.py               extra pages: dew point, sensor details, system (ESP32 only)
   assets.py, assets.bin    fonts and icons          (generated)
   config.example.json      settings template; your config.json is git-ignored
 tools/                     runs on the PC

@@ -22,11 +22,13 @@ CONFIG_FILE = "config.json"
 # Display choices made over MQTT (/display); they override config.json. Kept
 # apart so config.json, with the passwords, is never rewritten by the board.
 SETTINGS_FILE = "settings.json"
-PAGE_NAMES = ("air", "eco2", "tvoc", "temperature", "humidity")
-
 # The chip this runs on: "esp8266" or "esp32". Detected, so the same
 # config.json works on either board.
 PLATFORM = sys.platform
+
+# Display pages, in their default order. The ESP32 has the extra ones (ui_more.py).
+PAGE_NAMES = ("air", "eco2", "tvoc", "temperature", "humidity") + (
+    ("dewpoint", "sensor", "system") if PLATFORM == "esp32" else ())
 
 # Default pins per board; config.json "pins" overrides them.
 # display_reset: the OLED's RES pin, if wired (the 7-pin 2.42" modules need a
@@ -123,10 +125,13 @@ class App:
         i2c = make_i2c(cfg)
 
         # The display first: its two 1 KB buffers need RAM that isn't fragmented yet.
-        self.display = self.history = None
+        self.display = self.history = self.ble = None
         if cfg["display"]["enabled"]:
             try:
                 import ui
+                if PLATFORM == "esp32":
+                    import ui_more   # extra pages; must be known before the Display picks its pages
+                    ui_more.register(ui, self)
                 self.display = _display = ui.Display(i2c, cfg["display"], cfg["pins"]["display_reset"])
                 self.history = ui.History()
                 self.display.splash("Starting sensors", 0.1)
@@ -160,6 +165,31 @@ class App:
         print("Factory reset")
         self.reboot_at = time.ticks_add(time.ticks_ms(), 500)
 
+    def uptime_s(self):
+        return time.time() - self.boot_s
+
+    def system_info(self):
+        """The board itself: shown in the app (Bluetooth), /status and the system page."""
+        net = self.net
+        info = {
+            "uptime_s": self.uptime_s(),
+            "free_ram": gc.mem_free(),
+            "cpu_mhz": machine.freq() // 1000000,
+            "reset_cause": machine.reset_cause(),
+            "micropython": sys.implementation.version[:3],
+            "wifi": net.wifi_ok,
+            "wifi_rssi": net.rssi() if net.wifi_ok else None,
+            "ip": net.ip() if net.wifi_ok else None,
+            "mqtt": net.mqtt_ok,
+            "bluetooth": self.ble is not None and self.ble.connection is not None,
+            "chip_temperature": None,
+        }
+        if PLATFORM == "esp32":
+            import esp32
+            # Die temperature, uncalibrated: runs well above room temperature.
+            info["chip_temperature"] = (esp32.raw_temperature() - 32) / 1.8
+        return info
+
     def sensor_state(self):
         air = self.air
         return sensors.VALIDITY_NAMES[air.validity] if air.validity is not None else "no sensor"
@@ -179,6 +209,8 @@ class App:
         return {
             "temperature": _round(values[0], 1),
             "humidity": _round(values[1], 1),
+            "dew_point": _round(sensors.dew_point(values[0], values[1]), 1),
+            "absolute_humidity": _round(sensors.absolute_humidity(values[0], values[1]), 1),
             "eco2": _round(values[2], 0),
             "tvoc": _round(values[3], 0),
             "aqi": air.aqi if valid else None,

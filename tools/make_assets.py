@@ -28,9 +28,9 @@ FONTS = {
     # Big readings. Only what a number needs.
     "BIG": ("DejaVuSans-Bold.ttf", 32, "0123456789.-", 2),
     # Air-quality rating and units.
-    "MID": ("DejaVuSans-Bold.ttf", 15, " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.%°-", 1),
+    "MID": ("DejaVuSans-Bold.ttf", 15, " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.%°-³", 1),
     # Titles and small text.
-    "SMALL": ("DejaVuSans-Bold.ttf", 10, " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,:%°-+/()~", 1),
+    "SMALL": ("DejaVuSans-Bold.ttf", 10, " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,:%°-+/()~Ω³·", 1),
 }
 
 ICONS = {
@@ -103,6 +103,48 @@ ICONS = {
         .##.#######.
         ..########..
         ....####....
+    """,
+    "dew": """
+        ......#.....
+        .....###....
+        ....#####...
+        ...##.####..
+        ...#.#####..
+        ...#######..
+        ....#####...
+        ............
+        .#.#.#.#.#..
+        ............
+        #.#.#.#.#.#.
+        ............
+    """,
+    "chip": """
+        ..#.#.#.#...
+        .#########..
+        ##.......##.
+        .#.#####.#..
+        ##.#...#.##.
+        .#.#.#.#.#..
+        ##.#...#.##.
+        .#.#####.#..
+        ##.......##.
+        .#########..
+        ..#.#.#.#...
+        ............
+    """,
+    "antenna": """
+        .#........#.
+        #..#....#..#
+        #.#..##..#.#
+        #.#.####.#.#
+        #..#.##.#..#
+        .#...##...#.
+        .....##.....
+        .....##.....
+        ....####....
+        ....####....
+        ...######...
+        ............
     """,
     # Status bar, 8 px high.
     "wifi": """

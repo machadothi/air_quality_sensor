@@ -31,9 +31,12 @@ build such a UI**, step by step, so you can change it or reuse the approach.
 | `tvoc` | TVOC in ppb + chart |
 | `temperature` | °C + chart |
 | `humidity` | % + chart |
+| `dewpoint` | dew point, big; absolute humidity and comfort below (ESP32) |
+| `sensor` | ENS160 firmware and state, raw resistances R1/R4, the compensation it uses (ESP32) |
+| `system` | Wi-Fi signal, IP, links (MQTT, Bluetooth), uptime (ESP32) |
 
-(There was a network page; it was dropped to save RAM. The header shows Wi-Fi
-and MQTT state; IP and signal come with the `/status` request.)
+The last three are in `firmware/ui_more.py`, which only the ESP32 loads: the
+ESP8266 has no RAM to spare for them.
 
 Every page has the same frame:
 
