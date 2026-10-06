@@ -53,6 +53,7 @@ and their layouts match the Thunderboard firmware's `ble_protocol.h`.
 | 0C | **Calibration** | read, write, notify (every 5 s) | 20 | temperature offset and self-heating measurement, see below |
 | 0D | **Time** | read, write | 12 / 7 | the board's clock, see below |
 | 0E | **Wi-Fi** | read, write, notify (on change) | ≤ 512 | network, scan, MQTT on/off, see below |
+| 0F | **Weather** | read, write | ≤ 128 | Open-Meteo weather and its place, see below |
 
 **Air** (new for this board):
 
@@ -120,16 +121,25 @@ Wi-Fi the board also syncs from the internet (NTP) every 6 hours.
 
 **Wi-Fi** (read): u8 state (0 idle, 1 connecting, 2 connected, 3 failed), u8
 failure (1 wrong password, 2 not found, 3 other), i8 RSSI, 4 bytes IP, u8 SSID
-length + SSID, u8 scanning, u8 MQTT flags (bit 0 on, bit 1 connected), u8
+length + SSID, u8 scanning, u8 flags (bit 0 MQTT on, bit 1 MQTT connected,
+bit 2 online: internet reachable), u8
 count, then per network: u8 name length + name + i8 RSSI (at most 10).
 **Write**: `1` scan (the board blocks ~3 s), `2, len, SSID, len, password`
 connect (stored in `settings.json`), `3` back to `config.json`'s network, `4` /
 `5` MQTT on / off. The password travels unencrypted over Bluetooth.
 
+**Weather** (read): u8 flags (bit 0 on, bit 1 fresh data, bit 2 online), i16
+temperature × 10, i16 feels-like × 10, u8 humidity %, u8 WMO weather code, u8
+day (1) / night (0), i16 wind m/s × 10, i16 today's high × 10, i16 low × 10, u8
+rain chance %, u16 data age in minutes (`0xFFFF` = none), u8 length + place,
+u8 length + last error, u8 place found automatically (1). Values are `0x7FFF`
+when there's no fresh data. **Write**: `1, len, name` set the place (empty =
+find it from the internet address), `2` / `3` weather on / off, `4` refresh now.
+
 **Display page bits** (`page_mask`): bit 0 temperature, bit 1 humidity,
 bit 10 air quality, bit 11 eCO2, bit 12 TVOC, bit 13 dew point, bit 14 air
-sensor details, bit 15 system, bit 16 clock (in the 7th byte of the Display
-value: page bits 16–23). Bits 0–9 are the same as on the Thunderboard.
+sensor details, bit 15 system, bit 16 clock, bit 17 weather (in the 7th byte of
+the Display value: page bits 16–23). Bits 0–9 are the same as on the Thunderboard.
 - **Order is kept.** A mask has no order: the pages you keep stay in their
   current order, newly enabled ones are added at the end. The order itself can
   be changed over MQTT (`/display`).

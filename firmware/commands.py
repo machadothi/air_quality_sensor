@@ -6,7 +6,7 @@ import time
 
 from app import PAGE_NAMES   # already loaded, costs nothing
 
-REQUESTS = ("/read_all", "/status", "/display", "/display/next", "/offset", "/calibrate", "/topics", "/reboot")
+REQUESTS = ("/read_all", "/status", "/display", "/display/next", "/offset", "/calibrate", "/weather", "/topics", "/reboot")
 _DISPLAY_USAGE = '/display {"pages": [...], "page_s": 1-60, "rotate": true/false}'
 
 
@@ -76,6 +76,21 @@ def handle(app, text):
         elif words:
             return {"error": "/calibrate [start | cancel | auto on | auto off]"}
         return cal.status()
+    if text.startswith("/weather") and app.weather:
+        # /weather: status; /weather place <name> (or "auto"); /weather on|off|refresh
+        w, rest = app.weather, text[8:].strip()
+        if rest.startswith("place "):
+            w.set_place(rest[6:])
+        elif rest in ("on", "off"):
+            w.cfg["enabled"] = rest == "on"
+            app.save_settings()
+        elif rest == "refresh":
+            w.refresh()
+        elif rest:
+            return {"error": "/weather [place <name> | on | off | refresh]"}
+        return {"enabled": w.cfg["enabled"], "place": w.cfg["place"], "auto_place": w.cfg.get("auto_place"),
+                "online": app.online(),
+                "now": w.now, "age_s": w.age_s(), "error": w.error}
     if text == "/display/next" and app.display:
         app.display.next_page(app.air, net, app.history)
         return {"page": app.display.pages[app.display.index]}

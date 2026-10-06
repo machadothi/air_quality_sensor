@@ -28,7 +28,7 @@ PLATFORM = sys.platform
 
 # Display pages, in their default order. The ESP32 has the extra ones (ui_more.py).
 PAGE_NAMES = ("air", "eco2", "tvoc", "temperature", "humidity") + (
-    ("dewpoint", "sensor", "system", "clock") if PLATFORM == "esp32" else ())
+    ("dewpoint", "sensor", "system", "clock", "weather") if PLATFORM == "esp32" else ())
 
 # Default pins per board; config.json "pins" overrides them.
 # display_reset: the OLED's RES pin, if wired (the 7-pin 2.42" modules need a
@@ -60,6 +60,13 @@ def load_config():
             "publish_s": 60,                        # readings are averaged over this time
             "home_assistant_discovery": False,
             "device_name": "Air Monitor",
+        },
+        "weather": {                                # ESP32, Open-Meteo; the place is set from the app
+            "enabled": True,
+            "place": "",                            # "" = find it from the internet address
+            "auto_place": True,
+            "latitude": None,
+            "longitude": None,
         },
         "time": {                                   # ESP32: set by the app from the phone's zone
             "offset_min": 0,                        # standard offset from UTC, minutes
@@ -110,6 +117,7 @@ def load_config():
             cfg["wifi"].update(saved["wifi"])
             cfg["wifi_from_app"] = True
         cfg["time"].update(saved.get("time", {}))
+        cfg["weather"].update(saved.get("weather", {}))
         if "mqtt_enabled" in saved:
             cfg["mqtt"]["enabled"] = saved["mqtt_enabled"]
         cfg["display"].update(saved.get("display", {}))
@@ -165,11 +173,15 @@ class App:
 
         self.air = sensors.AirSensor(i2c, cfg["sensor"]["temperature_offset"])
         self.net = Net(cfg["wifi"], cfg["mqtt"], self.on_request)
-        self.ble = self.selfcal = self.clock = None
+        self.ble = self.selfcal = self.clock = self.weather = None
+        self._internet = False   # did the latest internet request (time, weather) succeed?
         if PLATFORM == "esp32":
             import clock
             import selfcal
+            import weather
             self.clock = clock.Clock(cfg["time"])
+            self.clock.on_result = self.internet_result
+            self.weather = weather.Weather(self)
             self.selfcal = selfcal.SelfCalibration(self)
         if PLATFORM == "esp32" and cfg["bluetooth"]["enabled"]:
             import ble
@@ -186,6 +198,7 @@ class App:
         with open(SETTINGS_FILE, "w") as f:
             json.dump({"wifi": cfg["wifi"] if cfg["wifi_from_app"] else None,
                        "time": cfg["time"],
+                       "weather": cfg["weather"],
                        "mqtt_enabled": cfg["mqtt"]["enabled"],
                        "display": {"pages": display["pages"], "page_s": display["page_s"],
                                    "rotate": display["rotate"]},
@@ -243,6 +256,17 @@ class App:
         print("Factory reset")
         self.reboot_at = time.ticks_add(time.ticks_ms(), 500)
 
+    def internet_result(self, ok):
+        """Each internet request (NTP, weather) reports here."""
+        if ok != self._internet:
+            print("Internet:", "reachable" if ok else "not reachable")
+        self._internet = ok
+
+    def online(self):
+        """Internet reachable: Wi-Fi up and the latest internet request worked.
+        Internet-dependent features (clock, weather, ...) only show while online."""
+        return self.net.wifi_ok and self._internet
+
     def uptime_s(self):
         return (self._uptime_ms + time.ticks_diff(time.ticks_ms(), self._uptime_tick)) // 1000
 
@@ -271,6 +295,7 @@ class App:
             t = self.clock.local()
             info["time"] = None if t is None else "%04d-%02d-%02d %02d:%02d" % t[:5]
             info["time_source"] = clock.SOURCES[self.clock.source]
+            info["online"] = self.online()
         return info
 
     def sensor_state(self):
@@ -355,6 +380,8 @@ class App:
                 self._uptime_tick = now
                 if self.clock:
                     self.clock.poll(net.wifi_ok)
+                if self.weather:
+                    self.weather.poll()
                 air.update()
                 net.poll()
                 if self.selfcal:

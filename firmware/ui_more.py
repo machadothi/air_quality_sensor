@@ -2,7 +2,10 @@
 #   dewpoint  dew point (big), absolute humidity and a comfort word
 #   sensor    ENS160 details: state, raw resistances, compensation in use, firmware
 #   system    Wi-Fi signal, IP, MQTT/Bluetooth links, uptime
-#   clock     local time, big; weekday and date (once the board knows the time)
+#   clock     local time, big; weekday and date
+#   weather   Open-Meteo: temperature, condition, today's high/low (weather.py)
+# clock and weather need the internet: they're skipped while the board is
+# offline (App.online()), and so should any future internet-dependent page.
 # register() adds them to ui's page table, before the Display is created.
 import assets
 import gfx
@@ -18,6 +21,9 @@ def register(ui, app):
     ui._PAGES["sensor"] = ("Air sensor", assets.ICON_CHIP, page_sensor)
     ui._PAGES["system"] = ("System", assets.ICON_ANTENNA, page_system)
     ui._PAGES["clock"] = ("Clock", assets.ICON_CLOCK, page_clock)
+    ui._PAGES["weather"] = (_weather_title, _weather_icon, page_weather)
+    ui._NEEDS["clock"] = lambda air: app.online() and app.clock is not None and app.clock.known()
+    ui._NEEDS["weather"] = lambda air: app.online() and app.weather is not None and app.weather.fresh()
 
 
 def _rows(fb, rows, y=17):
@@ -98,3 +104,31 @@ def page_clock(fb, air, net, history):
         return
     gfx.text_center(fb, assets.BIG, "%02d:%02d" % (t[3], t[4]), 18)
     gfx.text_center(fb, assets.SMALL, "%s %d %s %d" % (clock.DAYS[t[6]], t[2], clock.MONTHS[t[1] - 1], t[0]), 47)
+
+
+def _weather_title():
+    place = _APP.weather.cfg["place"] if _APP.weather else ""
+    return place[:14] or "Weather"
+
+
+def _weather_icon():
+    import weather
+    now = _APP.weather.now if _APP.weather else None
+    if now is None:
+        return assets.ICON_CLOUD
+    name = weather.describe(now["code"])[1]
+    return getattr(assets, "ICON_" + name.upper(), assets.ICON_CLOUD)
+
+
+def page_weather(fb, air, net, history):
+    import ui
+    import weather
+    w = _APP.weather
+    now = w.now if w and w.fresh() else None
+    if now is None:
+        gfx.text_center(fb, assets.MID, "No weather", 20)
+        gfx.text_center(fb, assets.SMALL, "set a place in the app" if not w.cfg["place"] else "waiting for data", 40)
+        return
+    ui._big_value(fb, now["temperature"], 0, "°C")
+    gfx.text(fb, assets.SMALL, weather.describe(now["code"])[0], 0, 47)
+    gfx.text_right(fb, assets.SMALL, "%d° / %d°" % (round(now["high"]), round(now["low"])), 128, 47)

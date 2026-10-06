@@ -38,6 +38,7 @@ class Clock:
         self.cfg = cfg                  # app.cfg["time"]: offset_min, dst
         self.source = 0   # unknown until set (the RTC survives a soft reset, but we can't tell by whom)
         self._next_ntp = time.ticks_ms()
+        self.on_result = None   # on_result(ok): tells the app whether the internet answered
 
     def known(self):
         return time.time() > _VALID_AFTER
@@ -87,6 +88,10 @@ class Clock:
             ntptime.settime()   # blocks up to ~1 s
             self.source = 1
             print("Clock set from the internet")
-        except Exception as e:   # no answer: try again in 6 h (or the phone sets it)
+            if self.on_result:
+                self.on_result(True)
+        except Exception as e:   # no answer: try again in 10 min (or the phone sets it)
             print("Clock: NTP failed:", e)
             self._next_ntp = time.ticks_add(time.ticks_ms(), 600000)
+            if self.on_result:
+                self.on_result(False)

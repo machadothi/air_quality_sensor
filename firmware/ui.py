@@ -123,7 +123,8 @@ class Display:
         n = len(self.pages)
         for step in range(1, n + 1):
             index = (self.index + step) % n
-            if self.pages[index] not in _NEED_VALID_AIR or air.valid:
+            needs = _NEEDS.get(self.pages[index])
+            if needs is None or needs(air):
                 break
         if index == self.index:
             self.refresh(air, net, history)
@@ -149,7 +150,8 @@ class Display:
         fb.fill(0)
         name = self.pages[self.index]
         title, icon, draw = _PAGES[name]
-        self._header(title, icon, net)
+        # A page may pick its title or icon when drawn (e.g. weather: place, sky).
+        self._header(title() if callable(title) else title, icon() if callable(icon) else icon, net)
         draw(fb, air, net, history)
         self._dots()
 
@@ -246,7 +248,10 @@ def _chart_page(key, decimals, unit, min_span, needs_valid_air):
     return draw
 
 
-_NEED_VALID_AIR = ("eco2", "tvoc")
+# Pages shown only when a condition holds: name -> needs(air) -> bool. Skipped
+# in the rotation otherwise (CO2/TVOC while the sensor warms up; ui_more.py adds
+# the internet-dependent pages).
+_NEEDS = {"eco2": lambda air: air.valid, "tvoc": lambda air: air.valid}
 
 # name: (title, icon, draw). display.pages picks and orders them; the default
 # order is app.PAGE_NAMES. (The network page was dropped to save RAM: the

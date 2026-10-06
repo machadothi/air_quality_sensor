@@ -46,8 +46,8 @@ PAGE_MS_MAX = const(60000)
 # Display.page_mask bits shared with the Thunderboard; 10-12 are this board's.
 PAGE_BITS = {"temperature": 1 << 0, "humidity": 1 << 1, "air": 1 << 10, "eco2": 1 << 11, "tvoc": 1 << 12,
              "dewpoint": 1 << 13, "sensor": 1 << 14, "system": 1 << 15,
-             "clock": 1 << 16}   # bits 16+ go in the Display value's 7th byte
-_PAGE_ORDER = ("air", "eco2", "tvoc", "temperature", "humidity", "dewpoint", "sensor", "system", "clock")
+             "clock": 1 << 16, "weather": 1 << 17}   # bits 16+ go in the Display value's 7th byte
+_PAGE_ORDER = ("air", "eco2", "tvoc", "temperature", "humidity", "dewpoint", "sensor", "system", "clock", "weather")
 
 # Air.state values: the ENS160 validity, or 0xFF without a sensor.
 _STATE_NO_SENSOR = const(0xFF)
@@ -74,7 +74,9 @@ _SYSTEM = (_uuid(0x0B), _FLAG_READ | _FLAG_NOTIFY)
 _CALIBRATION = (_uuid(0x0C), _FLAG_READ | _FLAG_WRITE | _FLAG_NOTIFY)
 _TIME = (_uuid(0x0D), _FLAG_READ | _FLAG_WRITE)
 _WIFI = (_uuid(0x0E), _FLAG_READ | _FLAG_WRITE | _FLAG_NOTIFY)
-_SERVICE = (_SERVICE_UUID, (_ENV, _INFO, _COMMAND, _NAME, _DISPLAY, _AIR, _SYSTEM, _CALIBRATION, _TIME, _WIFI))
+_WEATHER = (_uuid(0x0F), _FLAG_READ | _FLAG_WRITE)
+_SERVICE = (_SERVICE_UUID, (_ENV, _INFO, _COMMAND, _NAME, _DISPLAY, _AIR, _SYSTEM, _CALIBRATION, _TIME, _WIFI,
+                            _WEATHER))
 
 _UNIX_2000 = const(946684800)
 
@@ -94,13 +96,14 @@ class Ble:
         self.bthome = cfg["bthome"]
         self.ble.config(gap_name=self.name)
         ((self.h_env, self.h_info, self.h_command, self.h_name, self.h_display, self.h_air, self.h_system,
-          self.h_calibration, self.h_time, self.h_wifi),) = \
+          self.h_calibration, self.h_time, self.h_wifi, self.h_weather),) = \
             self.ble.gatts_register_services((_SERVICE,))
         self.ble.gatts_set_buffer(self.h_name, NAME_MAX)
         self.ble.gatts_set_buffer(self.h_display, 6)
         self.ble.gatts_set_buffer(self.h_calibration, 20)
         self.ble.gatts_set_buffer(self.h_time, 12)
         self.ble.gatts_set_buffer(self.h_wifi, 512)
+        self.ble.gatts_set_buffer(self.h_weather, 128)
         self.scan_results = []
         self.scanning = False
         self._wifi_value = b""
@@ -137,6 +140,7 @@ class Ble:
             self._update_system(notify=self.connection is not None)
             self.write_calibration(notify=self.connection is not None)
             self.write_time()
+            self.write_weather()
         if self.scanning:   # requested from the app: blocks ~3 s
             self.scan_results = self.app.net.scan()
             self.scanning = False
@@ -223,6 +227,30 @@ class Ble:
             "<IhBBhH", clock.utc() + _UNIX_2000 if known else 0, self.app.cfg["time"]["offset_min"],
             self.app.cfg["time"]["dst"], clock.source if clock else 0, clock.offset_min() if known else 0, 0))
 
+    def write_weather(self):
+        """Weather: flags (bit 0 on, 1 fresh data, 2 online), current values,
+        today's high/low, data age, place, last error. See docs/bluetooth.md."""
+        w = self.app.weather
+        if w is None:
+            return
+        now = w.now if w.fresh() else None
+        flags = (1 if w.cfg["enabled"] else 0) | (2 if now else 0) | (4 if self.app.online() else 0)
+
+        def x10(value):
+            return _NONE_I16 if value is None else int(round(value * 10))
+
+        n = now or {}
+        age = w.age_s()
+        place = w.cfg["place"].encode()[:40]
+        error = (w.error or "").encode()[:60]
+        value = struct.pack("<BhhBBBhhhBH", flags, x10(n.get("temperature")), x10(n.get("feels_like")),
+                            int(n.get("humidity") or 0), n.get("code") or 0, 1 if n.get("day") else 0,
+                            x10(n.get("wind")), x10(n.get("high")), x10(n.get("low")),
+                            int(n.get("rain_chance") or 0), 0xFFFF if age is None else min(age // 60, 0xFFFE))
+        value += bytes((len(place),)) + place + bytes((len(error),)) + error
+        value += bytes((1 if w.cfg.get("auto_place") else 0,))   # place found automatically
+        self.ble.gatts_write(self.h_weather, value)
+
     def write_wifi(self, notify):
         """Wi-Fi: state, reason, rssi, IP, SSID, scanning, scan results. Notified when it changes."""
         net = self.app.net
@@ -230,7 +258,8 @@ class Ble:
         ip = bytes(int(p) for p in net.ip().split(".")) if state == 2 else b"\0\0\0\0"
         ssid = net.ssid.encode()[:32]
         value = struct.pack("<BBb4sB", state, reason, net.rssi() if state == 2 else 0, ip, len(ssid)) + ssid
-        mqtt = (1 if self.app.cfg["mqtt"]["enabled"] else 0) | (2 if net.mqtt_ok else 0)
+        # bit 0 MQTT on, bit 1 MQTT connected, bit 2 online (internet reachable)
+        mqtt = (1 if self.app.cfg["mqtt"]["enabled"] else 0) | (2 if net.mqtt_ok else 0) | (4 if self.app.online() else 0)
         value += bytes((1 if self.scanning else 0, mqtt, len(self.scan_results)))
         for name, rssi in self.scan_results:
             name = name.encode()[:32]
@@ -341,6 +370,17 @@ class Ble:
             unix, offset, dst = struct.unpack("<IhB", value)
             app.set_time(unix, offset, dst)
             self.write_time()
+        elif handle == self.h_weather and value and self.app.weather:
+            # 1, len, name: set the place ("" = find automatically). 2 / 3: weather on / off. 4: refresh now.
+            w = self.app.weather
+            if value[0] == 1 and len(value) >= 2:
+                w.set_place(value[2:2 + value[1]].decode())
+            elif value[0] in (2, 3):
+                w.cfg["enabled"] = value[0] == 2
+                app.save_settings()
+            elif value[0] == 4:
+                w.refresh()
+            self.write_weather()
         elif handle == self.h_wifi and value:
             # 1: scan. 2, len, SSID, len, password: connect. 3: back to config.json's
             # network. 4 / 5: MQTT on / off.

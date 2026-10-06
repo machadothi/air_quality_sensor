@@ -82,6 +82,7 @@ Publish the text to the request topic; the JSON answer comes on the response top
 | `/display {"pages": [...], "page_s": 8, "rotate": true}` | changes the pages (order counts), seconds per page (1–60) and/or the 180° rotation; any key may be left out; stored in `settings.json`; answers like `/display`, or with `error` |
 | `/display/next` | moves the display to the next page; answers the page name |
 | `/offset`, `/offset -2.0` | the temperature offset; set it (°C, −10 to 10, stored) |
+| `/weather`, `/weather place <city>` (or `auto`), `/weather on/off/refresh` | weather status and settings (ESP32) |
 | `/calibrate`, `/calibrate start`, `/calibrate cancel`, `/calibrate auto on/off` | self-heating measurement (ESP32): status, start, cancel, daily on/off; see [sensors.md](sensors.md#temperature-offset) |
 | `/topics` | the topics in use and the accepted requests |
 | `/reboot` | answers, then restarts the board after 1 s |
@@ -141,6 +142,17 @@ and the same for `temperature`, `humidity`, `tvoc` and `aqi`.
 | HTTP | the board would need a web server, HA would poll; slower and heavier |
 | Bluetooth (BTHome) | the ESP8266 has no Bluetooth |
 
+## Internet services (ESP32)
+
+| Service | Used for | How often | Notes |
+|---|---|---|---|
+| NTP (`pool.ntp.org`) | the clock | every 6 h | |
+| [Open-Meteo](https://open-meteo.com) | weather, place lookup by name | every 30 min | open source, no key; plain HTTP (TLS needs more RAM than is left with Bluetooth running) |
+| [ip-api.com](https://ip-api.com) | place from the internet address | when no place is set | free for non-commercial use; city level, sometimes the provider's city |
+
+Their results decide whether the board is *online* (clock and weather pages
+shown) or not.
+
 ## config.json
 
 On the board (`config.json`) and on the PC (`firmware/config.json`,
@@ -167,6 +179,7 @@ topic_sub, topic_pub) are required; the rest falls back to
 | `pins.<board>.display_reset` | GPIO4 (ESP32), none (ESP8266) | OLED reset pin for 7-pin modules |
 | `sensor.temperature_offset` | 0.0 | °C added to the temperature ([sensors.md](sensors.md#temperature-offset)); settable from the app / `/offset` |
 | `sensor.auto_calibration` | false | measure the offset automatically: nightly at `calibration_hour` (3, local) once the board knows the time, else every `calibration_interval_h` (24) hours (ESP32) |
+| `weather.enabled` / `weather.place` | true / "" | Open-Meteo weather (ESP32); an empty place is found from the internet address (ip-api.com); settable in the app |
 | `time.offset_min` / `time.dst` | 0 / 0 | time zone (minutes from UTC, summer-time rule 0 none, 1 EU, 2 US); set by the app from the phone |
 | `sensor.cooldown_min` | 20 | longest cooling time of a measurement |
 | `display.enabled` | true | |
