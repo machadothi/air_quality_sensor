@@ -1,0 +1,244 @@
+# Air monitor: reads the ENS160 + AHT21 sensors, shows them on the OLED and
+# publishes them over MQTT. main.py calls run().
+#
+# One loop does everything, each job when it is due (App.loop). Nothing waits
+# more than a few milliseconds, so the display stays smooth and MQTT requests
+# are answered right away.
+#
+# RAM is the tight resource on the ESP8266 (~36 KB for everything): rarely
+# used code (commands.py, home_assistant.py) is only loaded when needed, and
+# defaults only exist while the configuration loads. See docs/architecture.md.
+import gc
+import json
+import sys
+import time
+
+import machine
+
+import sensors
+from net import Net
+
+CONFIG_FILE = "config.json"
+# Display choices made over MQTT (/display); they override config.json. Kept
+# apart so config.json, with the passwords, is never rewritten by the board.
+SETTINGS_FILE = "settings.json"
+PAGE_NAMES = ("air", "eco2", "tvoc", "temperature", "humidity")
+
+_REFRESH_MS = 1000       # redraw the shown page
+_HISTORY_MS = 60000      # one chart point a minute
+_MEMORY_MS = 10000       # track the lowest free RAM
+_WATCHDOG_MS = 120000    # restart if the loop stalls this long
+_BOOT_WIFI_WAIT_MS = 8000
+
+_display = None          # for the error screen in run()
+
+
+def load_config():
+    """config.json, completed with defaults, then settings.json on top."""
+    defaults = {
+        "esp": "esp8266",
+        "mqtt": {
+            "port": 0,                              # 0 = 1883
+            "topic_state": "esp/air_quality_sensor",
+            "publish_s": 60,                        # readings are averaged over this time
+            "home_assistant_discovery": False,
+            "device_name": "Air Monitor",
+        },
+        "sensor": {"temperature_offset": 0.0},      # °C added to the AHT21 reading
+        "display": {
+            "enabled": True,
+            "address": 0x3C,
+            "page_s": 5,                            # time per page
+            "contrast": 255,                        # brightness 0-255 (max)
+            "rotate": False,                        # True = upside down
+            "pages": list(PAGE_NAMES),
+        },
+    }
+    with open(CONFIG_FILE) as f:
+        cfg = json.load(f)
+    for section, values in defaults.items():
+        if isinstance(values, dict):
+            cfg.setdefault(section, {})
+            for key, value in values.items():
+                cfg[section].setdefault(key, value)
+        else:
+            cfg.setdefault(section, values)
+    if cfg.get("devices", {}).get("display") is False:   # the old firmware's switch
+        cfg["display"]["enabled"] = False
+    try:
+        with open(SETTINGS_FILE) as f:
+            cfg["display"].update(json.load(f)["display"])
+    except (OSError, ValueError, KeyError):   # nothing saved yet, or a damaged file
+        pass
+    return cfg
+
+
+def make_i2c(cfg):
+    pins = cfg["pins"][cfg["esp"]]
+    scl, sda = machine.Pin(pins["i2c_scl"]), machine.Pin(pins["i2c_sda"])
+    if cfg["esp"] == "esp8266":   # no hardware I2C on the ESP8266
+        return machine.SoftI2C(scl=scl, sda=sda, freq=400000)
+    return machine.I2C(0, scl=scl, sda=sda, freq=400000)
+
+
+def _mean(sums, i):
+    return sums[i] / sums[i + 1] if sums[i + 1] else None
+
+
+def _round(value, decimals):
+    return None if value is None else round(value, decimals) if decimals else int(value + 0.5)
+
+
+class App:
+    def __init__(self):
+        global _display
+        self.cfg = cfg = load_config()
+        self.boot_s = time.time()
+        self.reboot_at = None
+        self.last_feed = time.ticks_ms()
+        machine.freq(160000000)   # smoother display animation; the board is mains powered
+        i2c = make_i2c(cfg)
+
+        # The display first: its two 1 KB buffers need RAM that isn't fragmented yet.
+        self.display = self.history = None
+        if cfg["display"]["enabled"]:
+            try:
+                import ui
+                self.display = _display = ui.Display(i2c, cfg["display"])
+                self.history = ui.History()
+                self.display.splash("Starting sensors", 0.1)
+            except OSError as e:
+                print("Display not found:", e)
+
+        self.air = sensors.AirSensor(i2c, cfg["sensor"]["temperature_offset"])
+        self.net = Net(cfg["wifi"], cfg["mqtt"], self.on_request)
+        gc.collect()
+        self.min_free = gc.mem_free()
+
+    def sensor_state(self):
+        air = self.air
+        return sensors.VALIDITY_NAMES[air.validity] if air.validity is not None else "no sensor"
+
+    def state_message(self, sums=None):
+        """The JSON published on topic_state: averages of sums (from
+        air.take_sums()), or the latest readings without. Keys match the old
+        firmware's, plus aqi and state; eco2/tvoc/aqi are null until valid."""
+        air = self.air
+        valid = air.valid
+        if sums:
+            values = [_mean(sums, i) for i in (0, 2, 4, 6)]
+            values = [values[0] if air.has_climate else None, values[1] if air.has_climate else None,
+                      values[2] if valid else None, values[3] if valid else None]
+        else:
+            values = [air.temperature, air.humidity, air.eco2 if valid else None, air.tvoc if valid else None]
+        return {
+            "temperature": _round(values[0], 1),
+            "humidity": _round(values[1], 1),
+            "eco2": _round(values[2], 0),
+            "tvoc": _round(values[3], 0),
+            "aqi": air.aqi if valid else None,
+            "state": self.sensor_state(),
+            "status": air.status,   # raw ENS160 status register
+        }
+
+    def on_request(self, text):
+        """An MQTT request; commands.py answers it, loaded just for that."""
+        gc.collect()   # loading a module needs a few KB in one piece
+        try:
+            import commands
+            return commands.handle(self, text)
+        except Exception as e:   # a bad request must never take the board down
+            sys.print_exception(e)
+            return {"error": "%s: %s" % (type(e).__name__, e)}
+        finally:
+            sys.modules.pop("commands", None)
+            gc.collect()
+
+    def connect(self):
+        """Start screen while Wi-Fi connects; stop waiting after a few seconds."""
+        display, net = self.display, self.net
+        start = time.ticks_ms()
+        while not net.wifi_ok and time.ticks_diff(time.ticks_ms(), start) < _BOOT_WIFI_WAIT_MS:
+            if display:
+                display.splash("Connecting to Wi-Fi",
+                               0.2 + 0.6 * time.ticks_diff(time.ticks_ms(), start) / _BOOT_WIFI_WAIT_MS)
+            self.air.update()
+            time.sleep_ms(200)
+        if display:
+            display.splash("Connecting to MQTT" if net.wifi_ok else "No Wi-Fi yet", 0.9)
+        net.poll()
+
+    def _watchdog(self, _):
+        """Timer callback: restart if the loop stopped, e.g. on a hung network
+        call. (The ESP8266's hardware WDT can't be given a timeout this long.)"""
+        if time.ticks_diff(time.ticks_ms(), self.last_feed) > _WATCHDOG_MS:
+            print("Watchdog: main loop stuck, restarting")
+            machine.reset()
+
+    def loop(self):
+        air, net, display, history = self.air, self.net, self.display, self.history
+        cfg = self.cfg
+        now = time.ticks_ms()
+        next_publish = next_refresh = next_memory = now   # publish as soon as MQTT is up
+        next_history = time.ticks_add(now, 10000)          # first chart point soon
+        next_page = time.ticks_add(now, int(cfg["display"]["page_s"] * 1000))
+        # The ESP8266 has virtual timers (-1); the ESP32 has hardware timer 0.
+        timer = machine.Timer(-1 if cfg["esp"] == "esp8266" else 0)
+        timer.init(period=5000, mode=machine.Timer.PERIODIC, callback=self._watchdog)
+        print("Running")
+        try:
+            while True:
+                self.last_feed = now
+                air.update()
+                net.poll()
+                now = time.ticks_ms()
+
+                if net.mqtt_ok and time.ticks_diff(now, next_publish) >= 0:
+                    net.publish_state(self.state_message(air.take_sums()))
+                    next_publish = time.ticks_add(now, cfg["mqtt"]["publish_s"] * 1000)
+
+                if history and time.ticks_diff(now, next_history) >= 0:
+                    history.push(air)
+                    next_history = time.ticks_add(now, _HISTORY_MS)
+
+                if display:
+                    if time.ticks_diff(now, next_page) >= 0:
+                        display.next_page(air, net, history)
+                        now = time.ticks_ms()
+                        next_page = time.ticks_add(now, int(cfg["display"]["page_s"] * 1000))
+                        next_refresh = time.ticks_add(now, _REFRESH_MS)
+                    elif time.ticks_diff(now, next_refresh) >= 0:
+                        display.refresh(air, net, history)
+                        next_refresh = time.ticks_add(now, _REFRESH_MS)
+
+                if time.ticks_diff(now, next_memory) >= 0:
+                    gc.collect()
+                    self.min_free = min(self.min_free, gc.mem_free())
+                    next_memory = time.ticks_add(now, _MEMORY_MS)
+
+                if self.reboot_at is not None and time.ticks_diff(now, self.reboot_at) >= 0:
+                    machine.reset()
+
+                time.sleep_ms(20)
+        finally:
+            timer.deinit()
+
+
+def run():
+    """Run the monitor; on a crash show it, then restart the board."""
+    try:
+        app = App()
+        app.connect()
+        app.loop()
+    except KeyboardInterrupt:   # Ctrl+C from mpremote: stop, back to the REPL
+        print("Stopped")
+        raise
+    except Exception as e:
+        sys.print_exception(e)
+        if _display:
+            try:
+                _display.splash(type(e).__name__ + ", restarting", None, "Error")
+            except Exception:
+                pass
+        time.sleep(10)
+        machine.reset()

@@ -1,0 +1,33 @@
+{
+    "esp": "esp8266",
+    "wifi": {
+        "ssid": "<your Wi-Fi name>",
+        "password": "<your Wi-Fi password>"
+    },
+    "mqtt": {
+        "server": "<broker IP, e.g. 192.168.1.10>",
+        "client_id": "air-monitor",
+        "username": "<mqtt user>",
+        "password": "<mqtt password>",
+        "topic_sub": "esp/{client_id}/request",
+        "topic_pub": "esp/{client_id}/response",
+        "topic_state": "esp/air_quality_sensor",
+        "publish_s": 60,
+        "home_assistant_discovery": false,
+        "device_name": "Air Monitor"
+    },
+    "pins": {
+        "esp32": {"i2c_scl": 22, "i2c_sda": 21},
+        "esp8266": {"i2c_scl": 5, "i2c_sda": 4}
+    },
+    "sensor": {
+        "temperature_offset": 0.0
+    },
+    "display": {
+        "enabled": true,
+        "page_s": 5,
+        "contrast": 255,
+        "rotate": false,
+        "pages": ["air", "eco2", "tvoc", "temperature", "humidity", "network"]
+    }
+}

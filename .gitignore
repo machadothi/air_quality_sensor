@@ -218,3 +218,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- air_quality_sensor ---
+# Your Wi-Fi and MQTT passwords. Never commit; config.example.json documents it.
+firmware/config.json
+# Generated locally: compiled .mpy files, screen previews.
+preview/
+# Android app (android/): Gradle caches, local SDK path, IDE files
+.gradle/
+android/local.properties
+.idea/
+*.iml
+.kotlin/
