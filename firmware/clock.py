@@ -1,6 +1,6 @@
-# Wall-clock time (ESP32): set from the internet (NTP) when Wi-Fi is up, and
-# from the phone (the app sends its time and time zone over Bluetooth) when it
-# connects. MicroPython has no time-zone database, so the zone is a standard
+# Wall-clock time (ESP32): set from the internet (NTP) when Wi-Fi is up, from
+# the phone (the app sends its time and time zone over Bluetooth) when it
+# connects, or by hand in the app when there's no internet. MicroPython has no time-zone database, so the zone is a standard
 # UTC offset plus a summer-time rule (EU, US or none), which the app derives
 # from the phone's zone.
 #
@@ -14,7 +14,7 @@ UNIX_2000 = const(946684800)   # 2000-01-01 in Unix time
 NONE = const(0)
 EU = const(1)
 US = const(2)
-SOURCES = ("unknown", "internet", "phone")
+SOURCES = ("unknown", "internet", "phone", "manual")
 _NTP_EVERY_MS = const(6 * 3600 * 1000)
 _VALID_AFTER = const(800000000)   # seconds since 2000: anything before 2025 means "never set"
 DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -42,6 +42,12 @@ class Clock:
 
     def known(self):
         return time.time() > _VALID_AFTER
+
+    def trusted(self):
+        """Known and set since this start (internet, phone, by hand): the clock
+        page shows it even without internet. The ESP32 keeps time to within a
+        few seconds a day; the RTC is lost when the power goes."""
+        return self.source != 0 and self.known()
 
     def utc(self):
         """Seconds since 2000, UTC."""

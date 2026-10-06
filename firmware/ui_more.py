@@ -4,8 +4,9 @@
 #   system    Wi-Fi signal, IP, MQTT/Bluetooth links, uptime
 #   clock     local time, big; weekday and date
 #   weather   Open-Meteo: temperature, condition, today's high/low (weather.py)
-# clock and weather need the internet: they're skipped while the board is
-# offline (App.online()), and so should any future internet-dependent page.
+# weather needs the internet: it's skipped while the board is offline
+# (App.online()), and so should any future internet-dependent page. The clock
+# also shows offline once the time was set from the phone or by hand.
 # register() adds them to ui's page table, before the Display is created.
 import assets
 import gfx
@@ -22,7 +23,8 @@ def register(ui, app):
     ui._PAGES["system"] = ("System", assets.ICON_ANTENNA, page_system)
     ui._PAGES["clock"] = ("Clock", assets.ICON_CLOCK, page_clock)
     ui._PAGES["weather"] = (_weather_title, _weather_icon, page_weather)
-    ui._NEEDS["clock"] = lambda air: app.online() and app.clock is not None and app.clock.known()
+    ui.STATUS_ICONS.append(lambda: assets.ICON_UPDATE if app.updater and app.updater.state == 2 else None)
+    ui._NEEDS["clock"] = lambda air: app.clock is not None and app.clock.known() and (app.online() or app.clock.trusted())
     ui._NEEDS["weather"] = lambda air: app.online() and app.weather is not None and app.weather.fresh()
 
 

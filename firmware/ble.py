@@ -75,8 +75,9 @@ _CALIBRATION = (_uuid(0x0C), _FLAG_READ | _FLAG_WRITE | _FLAG_NOTIFY)
 _TIME = (_uuid(0x0D), _FLAG_READ | _FLAG_WRITE)
 _WIFI = (_uuid(0x0E), _FLAG_READ | _FLAG_WRITE | _FLAG_NOTIFY)
 _WEATHER = (_uuid(0x0F), _FLAG_READ | _FLAG_WRITE)
+_UPDATE = (_uuid(0x10), _FLAG_READ | _FLAG_WRITE | _FLAG_NOTIFY)
 _SERVICE = (_SERVICE_UUID, (_ENV, _INFO, _COMMAND, _NAME, _DISPLAY, _AIR, _SYSTEM, _CALIBRATION, _TIME, _WIFI,
-                            _WEATHER))
+                            _WEATHER, _UPDATE))
 
 _UNIX_2000 = const(946684800)
 
@@ -96,7 +97,7 @@ class Ble:
         self.bthome = cfg["bthome"]
         self.ble.config(gap_name=self.name)
         ((self.h_env, self.h_info, self.h_command, self.h_name, self.h_display, self.h_air, self.h_system,
-          self.h_calibration, self.h_time, self.h_wifi, self.h_weather),) = \
+          self.h_calibration, self.h_time, self.h_wifi, self.h_weather, self.h_update),) = \
             self.ble.gatts_register_services((_SERVICE,))
         self.ble.gatts_set_buffer(self.h_name, NAME_MAX)
         self.ble.gatts_set_buffer(self.h_display, 6)
@@ -104,6 +105,8 @@ class Ble:
         self.ble.gatts_set_buffer(self.h_time, 12)
         self.ble.gatts_set_buffer(self.h_wifi, 512)
         self.ble.gatts_set_buffer(self.h_weather, 128)
+        self.ble.gatts_set_buffer(self.h_update, 320)
+        self._update_value = b""
         self.scan_results = []
         self.scanning = False
         self._wifi_value = b""
@@ -135,6 +138,7 @@ class Ble:
             self._next_update = time.ticks_add(now, _UPDATE_MS)
             self._update_values(notify=self.connection is not None)
             self.write_wifi(notify=self.connection is not None)
+            self.write_update(notify=self.connection is not None)
         if time.ticks_diff(now, self._next_system) >= 0:
             self._next_system = time.ticks_add(now, _SYSTEM_MS)
             self._update_system(notify=self.connection is not None)
@@ -226,6 +230,26 @@ class Ble:
         self.ble.gatts_write(self.h_time, struct.pack(
             "<IhBBhH", clock.utc() + _UNIX_2000 if known else 0, self.app.cfg["time"]["offset_min"],
             self.app.cfg["time"]["dst"], clock.source if clock else 0, clock.offset_min() if known else 0, 0))
+
+    def write_update(self, notify):
+        """Update: u8 state, u8 progress %, then length-prefixed strings: current
+        version, available version, release notes, last error. Notified on change."""
+        u = self.app.updater
+        if u is None:
+            return
+        st = u.status()   # a check or install restarts the board: "checking" / "downloading" first
+
+        def text(value, limit):
+            data = (value or "").encode()[:limit]
+            return bytes((len(data),)) + data
+
+        value = (bytes((u.state, u.progress)) + text(st["version"], 16) + text(st["available"], 16)
+                 + text(st["notes"], 200) + text(st["error"], 60) + bytes((1 if st["auto"] else 0,)))
+        if value != self._update_value:
+            self._update_value = value
+            self.ble.gatts_write(self.h_update, value)
+            if notify and self.connection is not None:
+                self._notify(((self.h_update, value),))
 
     def write_weather(self):
         """Weather: flags (bit 0 on, 1 fresh data, 2 online), current values,
@@ -366,10 +390,21 @@ class Ble:
                 self.ble.config(gap_name=name)
                 print("Bluetooth: renamed to", name)
             self.ble.gatts_write(self.h_name, self.name.encode())
-        elif handle == self.h_time and len(value) == 7:
-            unix, offset, dst = struct.unpack("<IhB", value)
-            app.set_time(unix, offset, dst)
+        elif handle == self.h_time and len(value) in (7, 8):
+            # u32 Unix time, i16 standard offset, u8 rule [, u8 source: 2 phone, 3 set by hand]
+            unix, offset, dst = struct.unpack("<IhB", value[:7])
+            app.set_time(unix, offset, dst, 3 if len(value) == 8 and value[7] == 3 else 2)
             self.write_time()
+        elif handle == self.h_update and value and app.updater:
+            # 1: check now. 2: install the available update (the user said yes). 3: dismiss.
+            # 1 and 2 restart the board 1.5 s later (updater.py).
+            # 4 / 5: install automatically on / off.
+            if value[0] in (4, 5):
+                app.cfg["update"]["auto"] = value[0] == 4
+                app.save_settings()
+            else:
+                {1: app.updater.check, 2: app.updater.install, 3: app.updater.dismiss}.get(value[0], lambda: None)()
+            self.write_update(notify=True)
         elif handle == self.h_weather and value and self.app.weather:
             # 1, len, name: set the place ("" = find automatically). 2 / 3: weather on / off. 4: refresh now.
             w = self.app.weather

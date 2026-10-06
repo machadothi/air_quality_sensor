@@ -30,6 +30,9 @@ phone app, and as BTHome to Home Assistant.
 - **MQTT:** averaged readings every minute, requests answered right away
   (`/status`, `/read_all`, …), online/offline availability, and optional Home
   Assistant auto-discovery.
+- **Updates itself (ESP32)** from this repository's GitHub releases: it checks
+  every night and asks in the app before installing (or installs automatically,
+  if you allow it), and rolls back a version that doesn't start.
 - **Recovers on its own:** Wi-Fi and MQTT reconnect without blocking the
   display, sensors are re-detected, and a watchdog and crash handler restart
   the board.
@@ -67,6 +70,7 @@ For a board without MicroPython, the Android SDK, or full details, see
 | [docs/bluetooth.md](docs/bluetooth.md) | Bluetooth on the ESP32: advertising, GATT service, BTHome, the BLE Sensor app |
 | [docs/sensors.md](docs/sensors.md) | how the ENS160 and AHT21 are driven: registers, compensation, warm-up |
 | [docs/display.md](docs/display.md) | the UI, and **how to make a UI like it in Python**: fonts, icons, charts, animation, preview |
+| [docs/updates.md](docs/updates.md) | over-the-air updates, and how to make a release |
 | [docs/android-app.md](docs/android-app.md) | the phone app: screens, build, first start, how it talks to the board |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | when something doesn't work |
 
@@ -82,11 +86,15 @@ firmware/                  everything that runs on the board (MicroPython)
   commands.py              MQTT requests            (loaded on demand)
   home_assistant.py        Home Assistant discovery (loaded on demand)
   ui.py, gfx.py            display pages, drawing helpers
-  ui_more.py               extra pages: dew point, sensor details, system (ESP32 only)
+  ui_more.py               extra pages: dew point, sensor details, system, clock, weather (ESP32 only)
+  selfcal.py               self-heating measurement (temperature offset)   (ESP32 only)
+  clock.py, weather.py     time (NTP, phone, by hand) and Open-Meteo        (ESP32 only)
+  updater.py, version.py   over-the-air updates from GitHub releases        (ESP32 only)
   assets.py, assets.bin    fonts and icons          (generated)
   config.example.json      settings template; your config.json is git-ignored
 tools/                     runs on the PC
   deploy.sh                compile to .mpy, upload, restart
+  release.py               build a release for over-the-air updates (dist/)
   make_assets.py           generate fonts and icons
   preview.py, sim/         render every screen to PNG without the board
   screenshot.py            capture the real screen from the board

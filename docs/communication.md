@@ -84,6 +84,7 @@ Publish the text to the request topic; the JSON answer comes on the response top
 | `/offset`, `/offset -2.0` | the temperature offset; set it (°C, −10 to 10, stored) |
 | `/weather`, `/weather place <city>` (or `auto`), `/weather on/off/refresh` | weather status and settings (ESP32) |
 | `/calibrate`, `/calibrate start`, `/calibrate cancel`, `/calibrate auto on/off` | self-heating measurement (ESP32): status, start, cancel, daily on/off; see [sensors.md](sensors.md#temperature-offset) |
+| `/update`, `/update check`, `/update install`, `/update auto on/off` | firmware updates (ESP32), see [updates.md](updates.md) |
 | `/topics` | the topics in use and the accepted requests |
 | `/reboot` | answers, then restarts the board after 1 s |
 
@@ -149,9 +150,11 @@ and the same for `temperature`, `humidity`, `tvoc` and `aqi`.
 | NTP (`pool.ntp.org`) | the clock | every 6 h | |
 | [Open-Meteo](https://open-meteo.com) | weather, place lookup by name | every 30 min | open source, no key; plain HTTP (TLS needs more RAM than is left with Bluetooth running) |
 | [ip-api.com](https://ip-api.com) | place from the internet address | when no place is set | free for non-commercial use; city level, sometimes the provider's city |
+| GitHub releases | firmware updates | nightly at 03:30, or when asked | HTTPS, in a maintenance start, see [updates.md](updates.md) |
 
-Their results decide whether the board is *online* (clock and weather pages
-shown) or not.
+The time and weather results decide whether the board is *online* (weather
+page shown) or not. The clock page also shows offline once the time was set
+from the phone or by hand.
 
 ## config.json
 
@@ -181,6 +184,7 @@ topic_sub, topic_pub) are required; the rest falls back to
 | `sensor.auto_calibration` | false | measure the offset automatically: nightly at `calibration_hour` (3, local) once the board knows the time, else every `calibration_interval_h` (24) hours (ESP32) |
 | `weather.enabled` / `weather.place` | true / "" | Open-Meteo weather (ESP32); an empty place is found from the internet address (ip-api.com); settable in the app |
 | `time.offset_min` / `time.dst` | 0 / 0 | time zone (minutes from UTC, summer-time rule 0 none, 1 EU, 2 US); set by the app from the phone |
+| `update.auto` | false | install firmware updates without asking (ESP32, [updates.md](updates.md)); switchable in the app |
 | `sensor.cooldown_min` | 20 | longest cooling time of a measurement |
 | `display.enabled` | true | |
 | `display.address` | 0x3C (60) | OLED I2C address |

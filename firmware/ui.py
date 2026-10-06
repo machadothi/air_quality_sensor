@@ -160,8 +160,15 @@ class Display:
         gfx.icon(fb, icon, 0, 0)
         gfx.text(fb, assets.SMALL, title, 16, 1)
         gfx.icon(fb, assets.ICON_WIFI if net.wifi_ok else assets.ICON_WIFI_OFF, 117, 2)
+        x = 108
         if net.mqtt_ok:
-            gfx.icon(fb, assets.ICON_LINK, 108, 2)
+            gfx.icon(fb, assets.ICON_LINK, x, 2)
+            x -= 9
+        for status_icon in STATUS_ICONS:   # e.g. "update available" (ui_more.py)
+            icon = status_icon()
+            if icon:
+                gfx.icon(fb, icon, x, 2)
+                x -= 9
         gfx.dotted_hline(fb, 0, 14, W)
 
     def _dots(self):
@@ -247,6 +254,10 @@ def _chart_page(key, decimals, unit, min_span, needs_valid_air):
         gfx.sparkline(fb, history.series(key), 0, CHART_Y, W, CHART_H, min_span)
     return draw
 
+
+# More status icons left of Wi-Fi/MQTT in the header: callables returning an
+# icon, or None to show nothing (ui_more.py adds "update available").
+STATUS_ICONS = []
 
 # Pages shown only when a condition holds: name -> needs(air) -> bool. Skipped
 # in the rotation otherwise (CO2/TVOC while the sensor warms up; ui_more.py adds

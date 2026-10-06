@@ -68,6 +68,7 @@ def load_config():
             "latitude": None,
             "longitude": None,
         },
+        "update": {"auto": False},                  # ESP32: install updates without asking (updater.py)
         "time": {                                   # ESP32: set by the app from the phone's zone
             "offset_min": 0,                        # standard offset from UTC, minutes
             "dst": 0,                               # summer time rule: 0 none, 1 EU, 2 US
@@ -118,6 +119,7 @@ def load_config():
             cfg["wifi_from_app"] = True
         cfg["time"].update(saved.get("time", {}))
         cfg["weather"].update(saved.get("weather", {}))
+        cfg["update"].update(saved.get("update", {}))
         if "mqtt_enabled" in saved:
             cfg["mqtt"]["enabled"] = saved["mqtt_enabled"]
         cfg["display"].update(saved.get("display", {}))
@@ -134,6 +136,17 @@ def make_i2c(cfg):
     if PLATFORM == "esp8266":   # no hardware I2C on the ESP8266
         return machine.SoftI2C(scl=scl, sda=sda, freq=400000)
     return machine.I2C(0, scl=scl, sda=sda, freq=400000)
+
+
+def _confirm_update():
+    """The new version runs: no rollback (see boot.py)."""
+    import os
+    try:
+        os.remove("/update_trial")
+        from version import VERSION
+        print("Update confirmed:", VERSION)
+    except OSError:
+        pass
 
 
 def _mean(sums, i):
@@ -173,7 +186,7 @@ class App:
 
         self.air = sensors.AirSensor(i2c, cfg["sensor"]["temperature_offset"])
         self.net = Net(cfg["wifi"], cfg["mqtt"], self.on_request)
-        self.ble = self.selfcal = self.clock = self.weather = None
+        self.ble = self.selfcal = self.clock = self.weather = self.updater = None
         self._internet = False   # did the latest internet request (time, weather) succeed?
         if PLATFORM == "esp32":
             import clock
@@ -182,6 +195,8 @@ class App:
             self.clock = clock.Clock(cfg["time"])
             self.clock.on_result = self.internet_result
             self.weather = weather.Weather(self)
+            import updater
+            self.updater = updater.Updater(self)
             self.selfcal = selfcal.SelfCalibration(self)
         if PLATFORM == "esp32" and cfg["bluetooth"]["enabled"]:
             import ble
@@ -199,6 +214,7 @@ class App:
             json.dump({"wifi": cfg["wifi"] if cfg["wifi_from_app"] else None,
                        "time": cfg["time"],
                        "weather": cfg["weather"],
+                       "update": cfg["update"],
                        "mqtt_enabled": cfg["mqtt"]["enabled"],
                        "display": {"pages": display["pages"], "page_s": display["page_s"],
                                    "rotate": display["rotate"]},
@@ -230,12 +246,13 @@ class App:
         self.save_settings()
         self.net.set_wifi(wifi["ssid"], wifi["password"])
 
-    def set_time(self, unix_utc, offset_min, dst):
-        """Time and zone from the phone (Bluetooth)."""
+    def set_time(self, unix_utc, offset_min, dst, source=2):
+        """Time and zone from the app (Bluetooth): the phone's clock (source 2) or
+        set by hand (3)."""
         self.cfg["time"].update({"offset_min": offset_min, "dst": dst})
         self.save_settings()
         if self.clock:
-            self.clock.set_utc(unix_utc, 2)
+            self.clock.set_utc(unix_utc, source)
 
     def set_temperature_offset(self, offset):
         """°C added to the AHT21's temperature (it reads high: the ENS160 next to
@@ -370,6 +387,7 @@ class App:
         next_history = time.ticks_add(now, 10000)          # first chart point soon
         next_page = time.ticks_add(now, int(cfg["display"]["page_s"] * 1000))
         # The ESP8266 has virtual timers (-1); the ESP32 has hardware timer 0.
+        healthy = False   # 60 s of normal running confirms a fresh update (boot.py)
         timer = machine.Timer(-1 if PLATFORM == "esp8266" else 0)
         timer.init(period=5000, mode=machine.Timer.PERIODIC, callback=self._watchdog)
         print("Running")
@@ -382,6 +400,11 @@ class App:
                     self.clock.poll(net.wifi_ok)
                 if self.weather:
                     self.weather.poll()
+                if self.updater:
+                    self.updater.poll()
+                if not healthy and self.uptime_s() >= 60:
+                    healthy = True
+                    _confirm_update()
                 air.update()
                 net.poll()
                 if self.selfcal:

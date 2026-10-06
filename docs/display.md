@@ -37,11 +37,17 @@ build such a UI**, step by step, so you can change it or reuse the approach.
 | `clock` | local time, big; weekday and date (ESP32) |
 | `weather` | Open-Meteo: temperature, condition (icon in the header), today's high/low; the title is the place (ESP32) |
 
-**Internet-dependent pages** (clock, weather) are shown only while the board is
+**Internet-dependent pages** (weather) are shown only while the board is
 *online*: Wi-Fi up and its latest internet request (time sync, weather) worked
 (`App.online()`). Offline they're skipped, like CO2/TVOC during warm-up. A
 future internet feature adds its condition to `ui._NEEDS` the same way
-(`ui_more.register`).
+(`ui_more.register`). The **clock** page needs the internet too, unless the
+time was set from the phone or by hand in the app (`Clock.trusted()`).
+
+**Header icons** left of Wi-Fi/MQTT come from `ui.STATUS_ICONS`, a list of
+functions returning an icon or `None`. On the ESP32 it has one: the update
+icon (arrow into a tray) while a firmware update waits for an answer in the
+app ([updates.md](updates.md)).
 
 The last three are in `firmware/ui_more.py`, which only the ESP32 loads: the
 ESP8266 has no RAM to spare for them.

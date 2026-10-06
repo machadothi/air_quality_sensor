@@ -54,6 +54,7 @@ and their layouts match the Thunderboard firmware's `ble_protocol.h`.
 | 0D | **Time** | read, write | 12 / 7 | the board's clock, see below |
 | 0E | **Wi-Fi** | read, write, notify (on change) | ≤ 512 | network, scan, MQTT on/off, see below |
 | 0F | **Weather** | read, write | ≤ 128 | Open-Meteo weather and its place, see below |
+| 10 | **Update** | read, write, notify (on change) | ≤ 320 | firmware updates, see below |
 
 **Air** (new for this board):
 
@@ -114,10 +115,11 @@ automatic on/off, command (0 none, 1 start a measurement, 2 cancel). See
 
 **Time** (read, 12 bytes): u32 Unix time UTC (0 = not known), i16 standard
 offset from UTC in minutes, u8 summer-time rule (0 none, 1 EU, 2 US), u8 source
-(0 unknown, 1 internet, 2 phone), i16 offset in effect now (minutes), u16
-reserved. **Write** 7 bytes: u32 Unix time, i16 standard offset, u8 rule. The
-app does this on every connect, from the phone's clock and time zone; with
-Wi-Fi the board also syncs from the internet (NTP) every 6 hours.
+(0 unknown, 1 internet, 2 phone, 3 set by hand), i16 offset in effect now
+(minutes), u16 reserved. **Write** 7 bytes: u32 Unix time, i16 standard
+offset, u8 rule; an 8th byte `3` marks a time set by hand. The app sends the
+phone's time on every connect, unless the board's time was set by hand; with
+Wi-Fi the board also syncs from the internet (NTP) every 6 hours, which wins.
 
 **Wi-Fi** (read): u8 state (0 idle, 1 connecting, 2 connected, 3 failed), u8
 failure (1 wrong password, 2 not found, 3 other), i8 RSSI, 4 bytes IP, u8 SSID
@@ -135,6 +137,14 @@ rain chance %, u16 data age in minutes (`0xFFFF` = none), u8 length + place,
 u8 length + last error, u8 place found automatically (1). Values are `0x7FFF`
 when there's no fresh data. **Write**: `1, len, name` set the place (empty =
 find it from the internet address), `2` / `3` weather on / off, `4` refresh now.
+
+**Update** (read): u8 state (0 idle, 1 checking, 2 available, 3 installing,
+4 restarting, 5 failed, 6 up to date), u8 progress (unused), then
+length-prefixed UTF-8: current version, available version, release notes
+(≤ 200 bytes), last error; then u8 automatic installs on (1). **Write**: `1`
+check now, `2` install the available update, `3` later (stop offering it until
+the next check), `4` / `5` automatic installs on / off. `1` and `2` restart the
+board 1.5 s later; see [updates.md](updates.md).
 
 **Display page bits** (`page_mask`): bit 0 temperature, bit 1 humidity,
 bit 10 air quality, bit 11 eCO2, bit 12 TVOC, bit 13 dew point, bit 14 air
@@ -194,7 +204,8 @@ In `config.json` (all optional):
   - **Live:** air-quality card, eCO2, TVOC, temperature, humidity.
   - **Charts:** includes eCO2 and TVOC.
   - **Control:** identify, reboot, factory reset.
-  - **Settings:** name and display pages.
+  - **Settings:** name, Wi-Fi, clock (set by hand without internet), MQTT,
+    weather, calibration, display pages, firmware updates.
 - **nRF Connect** (Nordic, any phone): shows the service and lets you read each
   characteristic.
 - **From a Linux PC** with the BLE Sensor Python client:

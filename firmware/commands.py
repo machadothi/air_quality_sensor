@@ -6,7 +6,7 @@ import time
 
 from app import PAGE_NAMES   # already loaded, costs nothing
 
-REQUESTS = ("/read_all", "/status", "/display", "/display/next", "/offset", "/calibrate", "/weather", "/topics", "/reboot")
+REQUESTS = ("/read_all", "/status", "/display", "/display/next", "/offset", "/calibrate", "/weather", "/update", "/topics", "/reboot")
 _DISPLAY_USAGE = '/display {"pages": [...], "page_s": 1-60, "rotate": true/false}'
 
 
@@ -76,6 +76,21 @@ def handle(app, text):
         elif words:
             return {"error": "/calibrate [start | cancel | auto on | auto off]"}
         return cal.status()
+    if text.startswith("/update") and app.updater:
+        # /update: status; /update check | install
+        u, rest = app.updater, text[7:].strip()
+        if rest == "check":
+            u.check()
+        elif rest.startswith("source"):   # testing: "/update source <base url>" or "/update source" = GitHub
+            u.set_source(rest[6:].strip() or None)
+        elif rest == "install":
+            u.install()
+        elif rest in ("auto on", "auto off"):
+            app.cfg["update"]["auto"] = rest == "auto on"
+            app.save_settings()
+        elif rest:
+            return {"error": "/update [check | install]"}
+        return u.status()
     if text.startswith("/weather") and app.weather:
         # /weather: status; /weather place <name> (or "auto"); /weather on|off|refresh
         w, rest = app.weather, text[8:].strip()

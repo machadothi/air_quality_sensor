@@ -230,3 +230,4 @@ android/local.properties
 .idea/
 *.iml
 .kotlin/
+dist/
