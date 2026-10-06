@@ -11,7 +11,10 @@
 # Pages draw into a back buffer; refresh() copies it to the screen, next_page()
 # slides it in. Layout constants are pixel positions on the 128x64 screen.
 import framebuf
+import time
 from array import array
+
+import machine
 
 import ssd1306
 
@@ -69,7 +72,15 @@ def _fmt(value, decimals):
 
 
 class Display:
-    def __init__(self, i2c, cfg):
+    def __init__(self, i2c, cfg, reset_pin=None):
+        if reset_pin is not None:
+            # 7-pin modules (e.g. the 2.42" SSD1309) start only after a reset pulse on RES.
+            res = machine.Pin(reset_pin, machine.Pin.OUT, value=1)
+            time.sleep_ms(1)
+            res(0)
+            time.sleep_ms(10)
+            res(1)
+            time.sleep_ms(10)
         self.oled = ssd1306.SSD1306_I2C(W, H, i2c, addr=cfg["address"])
         self.oled.contrast(cfg["contrast"])
         # The driver's rotate(True) is the normal orientation (what its init sets).

@@ -16,10 +16,10 @@ PORT="${PORT:-/dev/ttyUSB0}"
 BIN="${VENV:-$ROOT/.venv}/bin"
 MPREMOTE="$BIN/mpremote"
 MPY_CROSS="$BIN/mpy-cross"
-MODULES=(app net sensors ui gfx assets commands home_assistant)
+MODULES=(app net sensors ui gfx assets commands home_assistant ble)
 # Files of the old firmware (esp_manager.py and friends) and stale sources,
 # which would be imported instead of the .mpy files.
-STALE=(esp_manager.py sensor_reader.py modules app.py net.py sensors.py ui.py gfx.py assets.py commands.py home_assistant.py)
+STALE=(esp_manager.py sensor_reader.py modules app.py net.py sensors.py ui.py gfx.py assets.py commands.py home_assistant.py ble.py)
 
 [ -x "$MPREMOTE" ] && [ -x "$MPY_CROSS" ] || { echo "Missing mpremote/mpy-cross in $BIN, see the top of $0"; exit 1; }
 
@@ -54,5 +54,8 @@ if [ "${1:-}" = "--config" ]; then
     args+=(+ cp "$ROOT/firmware/config.json" :config.json)
 fi
 remote "${args[@]}"
+# The ESP8266 firmware has the OLED driver built in; on the ESP32 it is a
+# package from micropython-lib (downloaded by mpremote, needs internet).
+remote exec "import ssd1306" >/dev/null 2>&1 || remote mip install ssd1306
 remote reset
 echo "Deployed. Log: $MPREMOTE connect $PORT repl   (Ctrl+C stops the program, Ctrl+] quits)"

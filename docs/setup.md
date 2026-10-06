@@ -15,7 +15,9 @@ From an empty board to a running air monitor, and the phone app.
 
 | What | Where | Used for |
 |---|---|---|
-| MicroPython 1.24.1 for ESP8266 | <https://micropython.org/download/ESP8266_GENERIC/>, file `ESP8266_GENERIC-20241129-v1.24.1.bin` | the board's firmware (interpreter + frozen libraries) |
+| MicroPython 1.24.1 for ESP32 | <https://micropython.org/download/ESP32_GENERIC/>, file `ESP32_GENERIC-20241129-v1.24.1.bin` | the board's firmware, ESP32 |
+| MicroPython 1.24.1 for ESP8266 | <https://micropython.org/download/ESP8266_GENERIC/>, file `ESP8266_GENERIC-20241129-v1.24.1.bin` | the board's firmware, ESP8266 |
+| `ssd1306` driver | micropython-lib; `tools/deploy.sh` installs it with `mpremote mip` | the OLED on the ESP32 (built into the ESP8266 firmware) |
 | Python 3.10+ | your distribution (`sudo apt install python3 python3-venv`) | the PC tools |
 | mpremote | `requirements.txt` (PyPI) | copy files, REPL, reset |
 | mpy-cross **1.24.1** | `requirements.txt`, pinned `1.24.1.post3` | compile to `.mpy`; must match the firmware version |
@@ -44,12 +46,25 @@ sudo usermod -aG dialout $USER     # access to /dev/ttyUSB0; log out and in once
 ## 2. MicroPython (new or wiped board only)
 
 ```sh
-.venv/bin/esptool.py --port /dev/ttyUSB0 erase_flash
-.venv/bin/esptool.py --port /dev/ttyUSB0 --baud 460800 write_flash --flash_size=detect 0 ESP8266_GENERIC-20241129-v1.24.1.bin
-.venv/bin/mpremote connect /dev/ttyUSB0 exec "import sys; print(sys.version)"    # check
+.venv/bin/esptool --port /dev/ttyUSB0 flash-id        # which chip? "ESP32-D0WD..." or "ESP8266"
+
+# ESP32: the firmware goes at 0x1000
+.venv/bin/esptool --chip esp32 --port /dev/ttyUSB0 erase-flash
+.venv/bin/esptool --chip esp32 --port /dev/ttyUSB0 --baud 460800 write-flash -z 0x1000 ESP32_GENERIC-20241129-v1.24.1.bin
+
+# ESP8266: the firmware goes at 0
+.venv/bin/esptool --port /dev/ttyUSB0 erase-flash
+.venv/bin/esptool --port /dev/ttyUSB0 --baud 460800 write-flash --flash-size=detect 0 ESP8266_GENERIC-20241129-v1.24.1.bin
+
+.venv/bin/mpremote connect /dev/ttyUSB0 exec "import sys; print(sys.platform, sys.version)"    # check
 ```
 
-`erase_flash` also erases the files on the board, including `config.json`.
+- **Erasing removes everything.** `erase-flash` also erases the files on the
+  board, including `config.json`.
+- **No connection?** If esptool reports "No serial data received", hold the
+  board's **BOOT** button, tap **EN**, release BOOT, and run the command again.
+  Disconnect everything from the board's pins while flashing; see
+  [troubleshooting.md](troubleshooting.md#esp32-wont-flash-or-boot).
 
 ## 3. Configuration
 

@@ -24,6 +24,18 @@ CONFIG_FILE = "config.json"
 SETTINGS_FILE = "settings.json"
 PAGE_NAMES = ("air", "eco2", "tvoc", "temperature", "humidity")
 
+# The chip this runs on: "esp8266" or "esp32". Detected, so the same
+# config.json works on either board.
+PLATFORM = sys.platform
+
+# Default pins per board; config.json "pins" overrides them.
+# display_reset: the OLED's RES pin, if wired (the 7-pin 2.42" modules need a
+# reset pulse at start-up); None when the module resets itself (4-pin modules).
+DEFAULT_PINS = {
+    "esp8266": {"i2c_scl": 5, "i2c_sda": 4, "display_reset": None},
+    "esp32": {"i2c_scl": 22, "i2c_sda": 21, "display_reset": 4},
+}
+
 _REFRESH_MS = 1000       # redraw the shown page
 _HISTORY_MS = 60000      # one chart point a minute
 _MEMORY_MS = 10000       # track the lowest free RAM
@@ -36,7 +48,6 @@ _display = None          # for the error screen in run()
 def load_config():
     """config.json, completed with defaults, then settings.json on top."""
     defaults = {
-        "esp": "esp8266",
         "mqtt": {
             "port": 0,                              # 0 = 1883
             "topic_state": "esp/air_quality_sensor",
@@ -45,6 +56,11 @@ def load_config():
             "device_name": "Air Monitor",
         },
         "sensor": {"temperature_offset": 0.0},      # °C added to the AHT21 reading
+        "bluetooth": {                              # ESP32 only, see ble.py
+            "enabled": True,
+            "bthome": True,                         # broadcast readings for Home Assistant
+            "name": "",                             # "" = Air-Monitor-<last 4 hex digits of the MAC>
+        },
         "display": {
             "enabled": True,
             "address": 0x3C,
@@ -56,6 +72,10 @@ def load_config():
     }
     with open(CONFIG_FILE) as f:
         cfg = json.load(f)
+    # "esp" in older config files is ignored: the board is detected (PLATFORM).
+    pins = DEFAULT_PINS[PLATFORM].copy()
+    pins.update(cfg.get("pins", {}).get(PLATFORM, {}))
+    cfg["pins"] = pins
     for section, values in defaults.items():
         if isinstance(values, dict):
             cfg.setdefault(section, {})
@@ -67,16 +87,18 @@ def load_config():
         cfg["display"]["enabled"] = False
     try:
         with open(SETTINGS_FILE) as f:
-            cfg["display"].update(json.load(f)["display"])
-    except (OSError, ValueError, KeyError):   # nothing saved yet, or a damaged file
+            saved = json.load(f)
+        cfg["display"].update(saved.get("display", {}))
+        cfg["bluetooth"].update(saved.get("bluetooth", {}))
+    except (OSError, ValueError, AttributeError):   # nothing saved yet, or a damaged file
         pass
     return cfg
 
 
 def make_i2c(cfg):
-    pins = cfg["pins"][cfg["esp"]]
+    pins = cfg["pins"]
     scl, sda = machine.Pin(pins["i2c_scl"]), machine.Pin(pins["i2c_sda"])
-    if cfg["esp"] == "esp8266":   # no hardware I2C on the ESP8266
+    if PLATFORM == "esp8266":   # no hardware I2C on the ESP8266
         return machine.SoftI2C(scl=scl, sda=sda, freq=400000)
     return machine.I2C(0, scl=scl, sda=sda, freq=400000)
 
@@ -96,7 +118,8 @@ class App:
         self.boot_s = time.time()
         self.reboot_at = None
         self.last_feed = time.ticks_ms()
-        machine.freq(160000000)   # smoother display animation; the board is mains powered
+        if PLATFORM == "esp8266":
+            machine.freq(160000000)   # smoother display animation (the ESP32 already runs at 160 MHz)
         i2c = make_i2c(cfg)
 
         # The display first: its two 1 KB buffers need RAM that isn't fragmented yet.
@@ -104,7 +127,7 @@ class App:
         if cfg["display"]["enabled"]:
             try:
                 import ui
-                self.display = _display = ui.Display(i2c, cfg["display"])
+                self.display = _display = ui.Display(i2c, cfg["display"], cfg["pins"]["display_reset"])
                 self.history = ui.History()
                 self.display.splash("Starting sensors", 0.1)
             except OSError as e:
@@ -112,8 +135,30 @@ class App:
 
         self.air = sensors.AirSensor(i2c, cfg["sensor"]["temperature_offset"])
         self.net = Net(cfg["wifi"], cfg["mqtt"], self.on_request)
+        self.ble = None
+        if PLATFORM == "esp32" and cfg["bluetooth"]["enabled"]:
+            import ble
+            self.ble = ble.Ble(self)
         gc.collect()
         self.min_free = gc.mem_free()
+
+    def save_settings(self):
+        """Store what was changed over MQTT or Bluetooth (display pages and
+        timing, Bluetooth name) in settings.json; config.json stays untouched."""
+        display, bt = self.cfg["display"], self.cfg["bluetooth"]
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump({"display": {"pages": display["pages"], "page_s": display["page_s"]},
+                       "bluetooth": {"name": bt["name"]}}, f)
+
+    def factory_reset(self):
+        """Forget settings.json (back to config.json) and restart."""
+        import os
+        try:
+            os.remove(SETTINGS_FILE)
+        except OSError:
+            pass
+        print("Factory reset")
+        self.reboot_at = time.ticks_add(time.ticks_ms(), 500)
 
     def sensor_state(self):
         air = self.air
@@ -183,7 +228,7 @@ class App:
         next_history = time.ticks_add(now, 10000)          # first chart point soon
         next_page = time.ticks_add(now, int(cfg["display"]["page_s"] * 1000))
         # The ESP8266 has virtual timers (-1); the ESP32 has hardware timer 0.
-        timer = machine.Timer(-1 if cfg["esp"] == "esp8266" else 0)
+        timer = machine.Timer(-1 if PLATFORM == "esp8266" else 0)
         timer.init(period=5000, mode=machine.Timer.PERIODIC, callback=self._watchdog)
         print("Running")
         try:
@@ -191,6 +236,8 @@ class App:
                 self.last_feed = now
                 air.update()
                 net.poll()
+                if self.ble:
+                    self.ble.poll()
                 now = time.ticks_ms()
 
                 if net.mqtt_ok and time.ticks_diff(now, next_publish) >= 0:

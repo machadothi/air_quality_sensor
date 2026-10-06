@@ -54,7 +54,9 @@ Every page has the same frame:
 
 ## Choosing the pages
 
-Which pages appear, their order and the time per page can be set in two ways:
+Which pages appear, their order and the time per page can be set in three ways:
+- **From the BLE Sensor phone app** (ESP32, over Bluetooth): Settings → Display;
+  see [bluetooth.md](bluetooth.md).
 - **Over MQTT,** without touching the board:
   ```sh
   mosquitto_pub ... -t esp/<client_id>/request -m '/display {"pages": ["air", "temperature", "humidity"], "page_s": 8}'

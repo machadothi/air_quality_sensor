@@ -5,7 +5,7 @@ import gc
 import json
 import time
 
-from app import PAGE_NAMES, SETTINGS_FILE   # already loaded, costs nothing
+from app import PAGE_NAMES   # already loaded, costs nothing
 
 REQUESTS = ("/read_all", "/status", "/display", "/display/next", "/topics", "/reboot")
 _DISPLAY_USAGE = '/display {"pages": [...], "page_s": 1-60}'
@@ -30,8 +30,9 @@ def _display(app, text):
         cfg["pages"], cfg["page_s"] = pages, page_s
         if app.display:
             app.display.set_pages(pages)
-        with open(SETTINGS_FILE, "w") as f:
-            json.dump({"display": {"pages": pages, "page_s": page_s}}, f)
+        app.save_settings()
+        if app.ble:
+            app.ble.write_display()   # keep the Bluetooth Display value in step
         print("Display:", pages, "every", page_s, "s")
     return {"present": app.display is not None, "pages": cfg["pages"], "page_s": cfg["page_s"],
             "available": PAGE_NAMES}

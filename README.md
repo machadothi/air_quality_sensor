@@ -1,8 +1,10 @@
 # Air Quality Sensor
 
-An ESP8266 running MicroPython reads an **ENS160** air-quality sensor and an
-**AHT21** temperature/humidity sensor, shows the readings on a 0.96" **SSD1306
-OLED**, and publishes them over **MQTT** to Home Assistant.
+An **ESP32** (or ESP8266) running MicroPython reads an **ENS160** air-quality
+sensor and an **AHT21** temperature/humidity sensor and shows the readings on an
+**OLED** (2.42" SSD1309 or 0.96" SSD1306). It publishes them over **MQTT** to
+Home Assistant, and, on the ESP32, over **Bluetooth LE**: to the BLE Sensor
+phone app, and as BTHome to Home Assistant.
 
 ![The display pages](docs/images/display.png)
 
@@ -16,6 +18,9 @@ OLED**, and publishes them over **MQTT** to Home Assistant.
 - **Accurate readings.** The ENS160 gets the real temperature and humidity as
   compensation. Readings are only reported once its warm-up is done, and an
   optional temperature offset corrects the combo board's self-heating.
+- **Bluetooth (ESP32):** the BLE Sensor phone app finds the board as "ESP32
+  Air", shows its readings and sets its name and display pages. BTHome
+  broadcasts reach Home Assistant without Wi-Fi.
 - **MQTT:** averaged readings every minute, requests answered right away
   (`/status`, `/read_all`, …), online/offline availability, and optional Home
   Assistant auto-discovery.
@@ -53,6 +58,7 @@ For a board without MicroPython, the Android SDK, or full details, see
 | [docs/setup.md](docs/setup.md) | downloads, flashing MicroPython, configuration, deploying |
 | [docs/architecture.md](docs/architecture.md) | the modules, the libraries they use, the main loop, the RAM budget |
 | [docs/communication.md](docs/communication.md) | I2C, Wi-Fi, MQTT topics and messages, Home Assistant |
+| [docs/bluetooth.md](docs/bluetooth.md) | Bluetooth on the ESP32: advertising, GATT service, BTHome, the BLE Sensor app |
 | [docs/sensors.md](docs/sensors.md) | how the ENS160 and AHT21 are driven: registers, compensation, warm-up |
 | [docs/display.md](docs/display.md) | the UI, and **how to make a UI like it in Python**: fonts, icons, charts, animation, preview |
 | [docs/android-app.md](docs/android-app.md) | the phone app: screens, build, first start, how it talks to the board |
@@ -66,6 +72,7 @@ firmware/                  everything that runs on the board (MicroPython)
   app.py                   configuration, main loop, watchdog
   sensors.py               ENS160 + AHT21 drivers
   net.py                   Wi-Fi + MQTT
+  ble.py                   Bluetooth LE: GATT service + BTHome (ESP32 only)
   commands.py              MQTT requests            (loaded on demand)
   home_assistant.py        Home Assistant discovery (loaded on demand)
   ui.py, gfx.py            display pages, drawing helpers

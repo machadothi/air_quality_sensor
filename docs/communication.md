@@ -134,12 +134,12 @@ and the same for `temperature`, `humidity`, `tvoc` and `aqi`.
 
 On the board (`config.json`) and on the PC (`firmware/config.json`,
 git-ignored). Only `wifi`, `mqtt` (server, client_id, username, password,
-topic_sub, topic_pub) and `pins` are required; the rest falls back to
+topic_sub, topic_pub) are required; the rest falls back to
 `DEFAULTS` in `firmware/app.py`. Template: `firmware/config.example.json`.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `esp` | `esp8266` | `esp8266` or `esp32` |
+| `esp` | – | ignored: the board type is detected |
 | `wifi.ssid` / `wifi.password` | | your network |
 | `mqtt.server` | | broker IP or host name |
 | `mqtt.port` | 0 (= 1883) | |
@@ -150,7 +150,9 @@ topic_sub, topic_pub) and `pins` are required; the rest falls back to
 | `mqtt.publish_s` | 60 | publish interval, s; readings are averaged over it |
 | `mqtt.home_assistant_discovery` | false | see above |
 | `mqtt.device_name` | `Air Monitor` | device name in HA |
-| `pins.<esp>.i2c_scl` / `i2c_sda` | | I2C pins (ESP8266: 5 / 4) |
+| `pins.<board>.i2c_scl` / `i2c_sda` | 22 / 21 (ESP32), 5 / 4 (ESP8266) | I2C pins |
+| `bluetooth.enabled` / `bthome` / `name` | true / true / "" | ESP32 only, see [bluetooth.md](bluetooth.md#settings) |
+| `pins.<board>.display_reset` | GPIO4 (ESP32), none (ESP8266) | OLED reset pin for 7-pin modules |
 | `sensor.temperature_offset` | 0.0 | °C added to the temperature ([sensors.md](sensors.md#temperature-offset)) |
 | `display.enabled` | true | |
 | `display.address` | 0x3C (60) | OLED I2C address |
