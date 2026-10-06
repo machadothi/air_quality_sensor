@@ -6,7 +6,7 @@ import time
 
 from app import PAGE_NAMES   # already loaded, costs nothing
 
-REQUESTS = ("/read_all", "/status", "/display", "/display/next", "/offset", "/topics", "/reboot")
+REQUESTS = ("/read_all", "/status", "/display", "/display/next", "/offset", "/calibrate", "/topics", "/reboot")
 _DISPLAY_USAGE = '/display {"pages": [...], "page_s": 1-60, "rotate": true/false}'
 
 
@@ -63,6 +63,19 @@ def handle(app, text):
             if app.ble:
                 app.ble.write_calibration()   # keep the Bluetooth value in step
         return {"temperature_offset": app.air.offset, "temperature": app.air.temperature}
+    if text.startswith("/calibrate") and app.selfcal:
+        # /calibrate: status; /calibrate start|cancel; /calibrate auto on|off
+        cal, words = app.selfcal, text.split()[1:]
+        if words == ["start"]:
+            cal.start()
+        elif words == ["cancel"]:
+            cal.cancel()
+        elif len(words) == 2 and words[0] == "auto" and words[1] in ("on", "off"):
+            app.cfg["sensor"]["auto_calibration"] = words[1] == "on"
+            app.save_settings()
+        elif words:
+            return {"error": "/calibrate [start | cancel | auto on | auto off]"}
+        return cal.status()
     if text == "/display/next" and app.display:
         app.display.next_page(app.air, net, app.history)
         return {"page": app.display.pages[app.display.index]}

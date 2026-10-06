@@ -111,6 +111,9 @@ class AirSensor:
         self.temperature = self.humidity = None
         self.aqi = self.tvoc = self.eco2 = self.validity = self.status = None
         self.r1_raw = self.r4_raw = self.comp_t = self.comp_rh = self.firmware = None
+        self.raw_temperature = None   # AHT21 before the offset (for selfcal.py)
+        self.paused = False           # ENS160 asleep for a self-heating measurement
+        self.pause_left = None        # (seconds left, total) while paused, set by selfcal.py
         self.errors = self.integrity_errors = self.humid_s = 0
         self.sums = [0.0] * 8   # temperature, humidity, eco2, tvoc: sum and count each
         now = time.ticks_ms()
@@ -126,7 +129,10 @@ class AirSensor:
         return self.has_air and self.validity == NORMAL and self.eco2 is not None
 
     def warmup_left_s(self):
-        """(seconds left, total) of the ENS160 warm-up, estimated from its start."""
+        """(seconds left, total) of the ENS160 warm-up (or the calibration pause),
+        estimated from its start."""
+        if self.paused and self.pause_left:
+            return self.pause_left
         total = _WARMUP_S[self.validity or 0]
         return max(0, total - time.ticks_diff(time.ticks_ms(), self._started) // 1000), total
 
@@ -146,7 +152,7 @@ class AirSensor:
                 self._lost("AHT21", e)
                 self.has_climate = False
                 self._measuring = self.temperature = self.humidity = None
-        if self.has_air:
+        if self.has_air and not self.paused:
             try:
                 self._update_ens(now)
             except OSError as e:
@@ -156,6 +162,30 @@ class AirSensor:
                 self.r1_raw = self.r4_raw = self.comp_t = self.comp_rh = None
 
     # --- internals --------------------------------------------------------------
+
+    def pause_air(self):
+        """ENS160 to deep sleep: its heaters go off and the board cools down."""
+        self._ens_write(_OPMODE, 0x00)
+        self.paused = True
+        self.aqi = self.tvoc = self.eco2 = None
+        print("ENS160 asleep (self-heating measurement)")
+
+    def resume_air(self):
+        """ENS160 back to measuring; its 3-minute warm-up follows."""
+        self.paused = False
+        self.pause_left = None
+        try:
+            self._ens_write(_OPMODE, _MODE_IDLE)
+            time.sleep_ms(10)
+            self._ens_write(_OPMODE, _MODE_STANDARD)
+            time.sleep_ms(10)
+            self._misr = self.i2c.readfrom_mem(_ENS, _MISR, 1)[0]
+        except OSError as e:
+            self._lost("ENS160", e)
+            self.has_air = False
+        self._started = time.ticks_ms()
+        self.validity = 1
+        print("ENS160 measuring again")
 
     def _lost(self, name, error):
         self.errors += 1
@@ -243,17 +273,20 @@ class AirSensor:
             if not d[0] & 0x80 and _crc8(d) == d[6]:   # not busy, CRC ok
                 humidity = (d[1] << 12 | d[2] << 4 | d[3] >> 4) * 100 / 1048576
                 temperature = ((d[3] & 0x0F) << 16 | d[4] << 8 | d[5]) * 200 / 1048576 - 50
-                if self.offset:
+                self.raw_temperature = temperature
+                # While the ENS160 sleeps the board cools to room temperature: no offset then.
+                offset = 0 if self.paused else self.offset
+                if offset:
                     # Same water vapour, different temperature: correct the RH to match.
-                    humidity *= math.exp(_magnus(temperature) - _magnus(temperature + self.offset))
-                    temperature += self.offset
+                    humidity *= math.exp(_magnus(temperature) - _magnus(temperature + offset))
+                    temperature += offset
                 self.temperature = temperature
                 self.humidity = humidity = min(100.0, max(0.0, humidity))
                 if humidity > _HUMID_RH:
                     self.humid_s += _AHT_PERIOD_MS // 1000
                 self._add(0, temperature)
                 self._add(2, humidity)
-                if self.has_air:   # compensation: (T + 273.15) * 64, RH * 512
+                if self.has_air and not self.paused:   # compensation: (T + 273.15) * 64, RH * 512
                     t = int((temperature + 273.15) * 64 + 0.5)
                     h = int(humidity * 512 + 0.5)
                     self.i2c.writeto_mem(_ENS, _TEMP_IN, bytes((t & 0xFF, t >> 8, h & 0xFF, h >> 8)))

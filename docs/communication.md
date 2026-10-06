@@ -77,6 +77,8 @@ Publish the text to the request topic; the JSON answer comes on the response top
 | `/display` | `{"present": true, "pages": [...], "page_s": 5, "available": [...]}` |
 | `/display {"pages": [...], "page_s": 8, "rotate": true}` | changes the pages (order counts), seconds per page (1–60) and/or the 180° rotation; any key may be left out; stored in `settings.json`; answers like `/display`, or with `error` |
 | `/display/next` | moves the display to the next page; answers the page name |
+| `/offset`, `/offset -2.0` | the temperature offset; set it (°C, −10 to 10, stored) |
+| `/calibrate`, `/calibrate start`, `/calibrate cancel`, `/calibrate auto on/off` | self-heating measurement (ESP32): status, start, cancel, daily on/off; see [sensors.md](sensors.md#temperature-offset) |
 | `/topics` | the topics in use and the accepted requests |
 | `/reboot` | answers, then restarts the board after 1 s |
 
@@ -158,7 +160,9 @@ topic_sub, topic_pub) are required; the rest falls back to
 | `pins.<board>.i2c_scl` / `i2c_sda` | 22 / 21 (ESP32), 5 / 4 (ESP8266) | I2C pins |
 | `bluetooth.enabled` / `bthome` / `name` | true / true / "" | ESP32 only, see [bluetooth.md](bluetooth.md#settings) |
 | `pins.<board>.display_reset` | GPIO4 (ESP32), none (ESP8266) | OLED reset pin for 7-pin modules |
-| `sensor.temperature_offset` | 0.0 | °C added to the temperature ([sensors.md](sensors.md#temperature-offset)) |
+| `sensor.temperature_offset` | 0.0 | °C added to the temperature ([sensors.md](sensors.md#temperature-offset)); settable from the app / `/offset` |
+| `sensor.auto_calibration` | false | measure the offset automatically every `calibration_interval_h` (24) hours (ESP32) |
+| `sensor.cooldown_min` | 20 | longest cooling time of a measurement |
 | `display.enabled` | true | |
 | `display.address` | 0x3C (60) | OLED I2C address |
 | `display.page_s` | 5 | seconds per page |

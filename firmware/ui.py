@@ -191,11 +191,13 @@ def _big_value(fb, value, decimals, unit):
 def _warming_up(fb, air):
     """Shown instead of air readings while the ENS160 heats up (invalid data)."""
     left, total = air.warmup_left_s()
-    gfx.text_center(fb, assets.MID, "Warming up", VALUE_Y)
+    paused = getattr(air, "paused", False)   # self-heating measurement (selfcal.py)
+    gfx.text_center(fb, assets.MID, "Calibrating" if paused else "Warming up", VALUE_Y)
     fb.rect(14, 37, 100, 7, 1)
     done = 1 - left / total if total else 0
     fb.fill_rect(16, 39, int(96 * done), 3, 1)
-    gfx.text_center(fb, assets.SMALL, "about %d min left" % ((left + 59) // 60) if left else "almost ready", 48)
+    note = "up to %d min left" if paused else "about %d min left"
+    gfx.text_center(fb, assets.SMALL, note % ((left + 59) // 60) if left else "almost ready", 48)
 
 
 def _no_sensor(fb):

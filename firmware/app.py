@@ -60,7 +60,12 @@ def load_config():
             "home_assistant_discovery": False,
             "device_name": "Air Monitor",
         },
-        "sensor": {"temperature_offset": 0.0},      # °C added to the AHT21 reading
+        "sensor": {
+            "temperature_offset": 0.0,              # °C added to the AHT21 reading
+            "auto_calibration": False,              # measure the offset automatically (selfcal.py)
+            "calibration_interval_h": 24,
+            "cooldown_min": 20,                     # longest cooling period of a measurement
+        },
         "bluetooth": {                              # ESP32 only, see ble.py
             "enabled": True,
             "bthome": True,                         # broadcast readings for Home Assistant
@@ -144,7 +149,10 @@ class App:
 
         self.air = sensors.AirSensor(i2c, cfg["sensor"]["temperature_offset"])
         self.net = Net(cfg["wifi"], cfg["mqtt"], self.on_request)
-        self.ble = None
+        self.ble = self.selfcal = None
+        if PLATFORM == "esp32":
+            import selfcal
+            self.selfcal = selfcal.SelfCalibration(self)
         if PLATFORM == "esp32" and cfg["bluetooth"]["enabled"]:
             import ble
             self.ble = ble.Ble(self)
@@ -160,7 +168,8 @@ class App:
             json.dump({"display": {"pages": display["pages"], "page_s": display["page_s"],
                                    "rotate": display["rotate"]},
                        "bluetooth": {"name": bt["name"]},
-                       "sensor": {"temperature_offset": self.air.offset}}, f)
+                       "sensor": {"temperature_offset": self.air.offset,
+                                  "auto_calibration": self.cfg["sensor"]["auto_calibration"]}}, f)
 
     def set_temperature_offset(self, offset):
         """°C added to the AHT21's temperature (it reads high: the ENS160 next to
@@ -208,6 +217,8 @@ class App:
 
     def sensor_state(self):
         air = self.air
+        if air.paused:
+            return "calibrating"
         return sensors.VALIDITY_NAMES[air.validity] if air.validity is not None else "no sensor"
 
     def state_message(self, sums=None):
@@ -284,6 +295,8 @@ class App:
                 self.last_feed = now
                 air.update()
                 net.poll()
+                if self.selfcal:
+                    self.selfcal.poll()
                 if self.ble:
                     self.ble.poll()
                 now = time.ticks_ms()

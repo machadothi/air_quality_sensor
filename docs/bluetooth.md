@@ -50,6 +50,7 @@ and their layouts match the Thunderboard firmware's `ble_protocol.h`.
 | 09 | Display | read, write | 6 | `present` (u8), `page_mask` (u16), `page_ms` (u16, 1000–60000), `flags` (u8, bit 0 = rotated 180°). A 5-byte write (Thunderboard clients) leaves the rotation as it is. |
 | 0A | **Air** | read, notify (every 2 s) | 22 | see below |
 | 0B | **System** | read, notify (every 5 s) | 32 | the ESP32 itself, see below |
+| 0C | **Calibration** | read, write, notify (every 5 s) | 20 | temperature offset and self-heating measurement, see below |
 
 **Air** (new for this board):
 
@@ -87,6 +88,26 @@ still works.
 | 24 | u16 | ENS160 checksum errors |
 | 26 | u32 | seconds the AHT21 spent above 80 %RH since start |
 | 30 | u16 | reserved |
+
+**Calibration** (read):
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | i16 | temperature offset in use, °C × 100 |
+| 2 | u8 | automatic daily measurement on (1) / off (0) |
+| 3 | u8 | measurement state: 0 idle, 2 cooling, 3 done, 4 failed |
+| 4 | u16 | seconds since the measurement started |
+| 6 | u16 | longest cooling time, s |
+| 8 | i16 | warm temperature (uncorrected, before cooling), °C × 100, `0x7FFF` = none |
+| 10 | i16 | current uncorrected temperature, °C × 100 |
+| 12 | i16 | last result, °C × 100, `0x7FFF` = none |
+| 14 | u32 | seconds since the last result, `0xFFFFFFFF` = none |
+| 18 | u8 | why the last run failed: 1 sensor not answering, 2 room temperature changed, 3 cancelled, 4 out of range |
+| 19 | u8 | reserved |
+
+Write 2 bytes (`i16` offset × 100) to set the offset, or 4 bytes: offset,
+automatic on/off, command (0 none, 1 start a measurement, 2 cancel). See
+[sensors.md](sensors.md#temperature-offset) for the measurement.
 
 **Display page bits** (`page_mask`): bit 0 temperature, bit 1 humidity,
 bit 10 air quality, bit 11 eCO2, bit 12 TVOC, bit 13 dew point, bit 14 air

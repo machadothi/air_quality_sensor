@@ -138,20 +138,42 @@ From temperature and humidity, both in the firmware and in the app:
 ## Temperature offset
 
 On this breakout the ENS160's hot plates sit a few millimetres from the AHT21,
-so the AHT21 typically reads **1–3 °C above the room**. To correct:
-1. Let it run for 30 minutes.
-2. Compare with a thermometer you trust.
-3. Set the difference in `config.json`, e.g. `"sensor": {"temperature_offset": -2.0}`.
+so the AHT21 typically reads **1–3 °C above the room**. Neither chip can correct
+that: the AHT21's calibration covers its own sensor, and the ENS160 doesn't
+report its heat. The firmware adds an **offset** to the temperature, corrects
+the humidity to match (below), and feeds the corrected values to the ENS160.
 
-The firmware then also corrects the **humidity**. The same amount of water
-vapour is a higher relative humidity in cooler air. With the Magnus formula:
+**Setting it by hand:** after 30 minutes, compare with a thermometer you trust
+right next to the board and set the difference: in the app (Settings →
+Calibration), over MQTT (`/offset -2.0`), or in `config.json`
+(`"sensor": {"temperature_offset": -2.0}`).
+
+**Measuring it automatically (ESP32, `firmware/selfcal.py`):** the board
+switches the ENS160's heaters off and watches how far its temperature drops.
+1. **Warm:** the AHT21's uncorrected temperature, averaged over the last minute.
+2. **Cool down:** the ENS160 goes to deep sleep. The firmware waits until the
+   temperature changes by less than 0.05 °C in 2 minutes: at least 5 minutes,
+   at most `cooldown_min` (20).
+3. **Result:** cool minus warm (averaged again) is the offset. It's applied and
+   saved, and the ENS160 measures again after its 3-minute warm-up.
+4. **Rejected runs:** if the temperature *rose*, the room changed during the
+   run, so the result is thrown away ("room temperature changed").
+
+Start it from the app (Calibration → Measure now) or over MQTT
+(`/calibrate start`). With "Daily" on (`/calibrate auto on`), it runs every
+`calibration_interval_h` hours (24), once the ENS160 has run an hour. While it
+runs, the display and the app show "Calibrating", and there are no air
+readings. The result depends on airflow: measure again after moving the board
+or putting it in a case.
+
+**Humidity follows.** The same amount of water vapour is a higher relative
+humidity in cooler air. With the Magnus formula:
 
 ```
 RH_room = RH_measured × exp(m(T_measured) − m(T_room)),   m(t) = 17.62·t / (243.12 + t)
 ```
 
-Example: 50 % at 26 °C becomes 56.3 % at 24 °C. The corrected values are also
-what the ENS160 gets as compensation.
+Example: 50 % at 26 °C becomes 56.3 % at 24 °C.
 
 ## Averaging
 

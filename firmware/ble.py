@@ -70,7 +70,7 @@ _NAME = (_uuid(0x08), _FLAG_READ | _FLAG_WRITE)
 _DISPLAY = (_uuid(0x09), _FLAG_READ | _FLAG_WRITE)
 _AIR = (_uuid(0x0A), _FLAG_READ | _FLAG_NOTIFY)
 _SYSTEM = (_uuid(0x0B), _FLAG_READ | _FLAG_NOTIFY)
-_CALIBRATION = (_uuid(0x0C), _FLAG_READ | _FLAG_WRITE)
+_CALIBRATION = (_uuid(0x0C), _FLAG_READ | _FLAG_WRITE | _FLAG_NOTIFY)
 _SERVICE = (_SERVICE_UUID, (_ENV, _INFO, _COMMAND, _NAME, _DISPLAY, _AIR, _SYSTEM, _CALIBRATION))
 
 
@@ -93,6 +93,7 @@ class Ble:
             self.ble.gatts_register_services((_SERVICE,))
         self.ble.gatts_set_buffer(self.h_name, NAME_MAX)
         self.ble.gatts_set_buffer(self.h_display, 6)
+        self.ble.gatts_set_buffer(self.h_calibration, 20)
         self.ble.irq(self._irq)
         self.connection = None
         self.pending = []          # writes from the IRQ, handled in poll()
@@ -121,6 +122,7 @@ class Ble:
         if time.ticks_diff(now, self._next_system) >= 0:
             self._next_system = time.ticks_add(now, _SYSTEM_MS)
             self._update_system(notify=self.connection is not None)
+            self.write_calibration(notify=self.connection is not None)
         if time.ticks_diff(now, self._next_adv) >= 0:
             self._next_adv = time.ticks_add(now, _ADV_SWITCH_MS)
             self._advertise()
@@ -193,9 +195,26 @@ class Ble:
         self.ble.gatts_write(self.h_display, struct.pack(
             "<BHHB", 1 if self.app.display else 0, mask, int(cfg["page_s"] * 1000), 1 if cfg["rotate"] else 0))
 
-    def write_calibration(self):
-        """Calibration: i16 temperature offset, °C × 100."""
-        self.ble.gatts_write(self.h_calibration, struct.pack("<h", int(round(self.app.air.offset * 100))))
+    def write_calibration(self, notify=False):
+        """Calibration (20 bytes): offset and the self-heating measurement's
+        status, see docs/bluetooth.md."""
+        app = self.app
+        cal = app.selfcal
+
+        def x100(value):
+            return _NONE_I16 if value is None else int(round(value * 100))
+
+        if cal:
+            st = cal.status()
+            age = 0xFFFFFFFF if st["result_age_s"] is None else st["result_age_s"]
+            value = struct.pack("<hBBHHhhhIBB", x100(app.air.offset), 1 if st["auto"] else 0, cal.state,
+                                st["elapsed_s"], st["cooldown_s"], x100(st["warm"]), x100(st["now"]),
+                                x100(st["result"]), age, cal.reason, 0)
+        else:
+            value = struct.pack("<h", x100(app.air.offset))
+        self.ble.gatts_write(self.h_calibration, value)
+        if notify:
+            self._notify(((self.h_calibration, value),))
 
     # --- advertising ------------------------------------------------------------
 
@@ -273,12 +292,23 @@ class Ble:
                 print("Bluetooth: renamed to", name)
             self.ble.gatts_write(self.h_name, self.name.encode())
         elif handle == self.h_calibration:
-            if len(value) == 2:
+            # 2 bytes: offset. 4 bytes: offset, auto (0/1), command (1 start, 2 cancel).
+            if len(value) in (2, 4):
+                offset = struct.unpack("<h", value[:2])[0] / 100
                 try:
-                    app.set_temperature_offset(struct.unpack("<h", value)[0] / 100)
+                    if offset != app.air.offset:
+                        app.set_temperature_offset(offset)
                 except ValueError as e:
                     print("Bluetooth:", e)
-            self.write_calibration()
+                if len(value) == 4 and app.selfcal:
+                    if bool(value[2]) != app.cfg["sensor"]["auto_calibration"]:
+                        app.cfg["sensor"]["auto_calibration"] = bool(value[2])
+                        app.save_settings()
+                    if value[3] == 1:
+                        app.selfcal.start()
+                    elif value[3] == 2:
+                        app.selfcal.cancel()
+            self.write_calibration(notify=True)
         elif handle == self.h_display:
             # A rejected write can't be refused over the air from MicroPython:
             # the old value is written back, and the app sees it on its next read.
