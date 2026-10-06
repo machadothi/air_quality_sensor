@@ -1,5 +1,11 @@
 package com.machadothi.airmonitor.ui.screen.connect
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -51,12 +57,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.machadothi.airmonitor.ui.components.ConfirmDialog
@@ -68,6 +76,17 @@ fun ConnectScreen(onConnected: () -> Unit, viewModel: ConnectViewModel = hiltVie
     val state by viewModel.state.collectAsStateWithLifecycle()
     val connected by viewModel.connected.collectAsStateWithLifecycle()
     LaunchedEffect(connected) { if (connected) onConnected() }
+
+    // Android 17+ blocks the home network unless the user allows it ("Nearby devices").
+    val context = LocalContext.current
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) viewModel.connect() else viewModel.permissionDenied()
+    }
+    val connectWithPermission = {
+        if (hasLocalNetworkPermission(context)) viewModel.connect()
+        else permissionLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
+    }
+    LaunchedEffect(state.autoConnect) { if (state.autoConnect) connectWithPermission() }
 
     var showPassword by rememberSaveable { mutableStateOf(false) }
     var showAdvanced by rememberSaveable { mutableStateOf(false) }
@@ -86,6 +105,7 @@ fun ConnectScreen(onConnected: () -> Unit, viewModel: ConnectViewModel = hiltVie
         Text(
             "Air Monitor",
             style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
         )
@@ -182,7 +202,7 @@ fun ConnectScreen(onConnected: () -> Unit, viewModel: ConnectViewModel = hiltVie
 
         Spacer(Modifier.height(18.dp))
         Button(
-            onClick = viewModel::connect,
+            onClick = connectWithPermission,
             enabled = s.isComplete && !state.connecting,
             modifier = Modifier.fillMaxWidth().height(52.dp),
         ) {
@@ -218,6 +238,10 @@ fun ConnectScreen(onConnected: () -> Unit, viewModel: ConnectViewModel = hiltVie
         )
     }
 }
+
+private fun hasLocalNetworkPermission(context: Context): Boolean =
+    Build.VERSION.SDK_INT < 37 ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED
 
 /** The app's mark; breathes while connecting. */
 @Composable

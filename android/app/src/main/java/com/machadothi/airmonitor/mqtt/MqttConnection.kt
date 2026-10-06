@@ -7,7 +7,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
 import org.eclipse.paho.client.mqttv3.IMqttActionListener
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
 import org.eclipse.paho.client.mqttv3.IMqttToken
@@ -17,6 +19,7 @@ import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttException
 import org.eclipse.paho.client.mqttv3.MqttMessage
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
+import android.util.Log
 import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -61,6 +64,7 @@ class MqttConnection {
         mqtt.setCallback(object : MqttCallbackExtended {
             override fun connectComplete(reconnect: Boolean, serverURI: String) {
                 if (reconnect) {
+                    Log.i(TAG, "reconnected")
                     // A clean session forgets subscriptions: subscribe again.
                     runCatching { topics.forEach { mqtt.subscribe(it, 0) } }
                     _status.value = BrokerStatus.Connected
@@ -68,6 +72,7 @@ class MqttConnection {
             }
 
             override fun connectionLost(cause: Throwable?) {
+                Log.w(TAG, "connection lost", cause)
                 _status.value = BrokerStatus.Reconnecting
             }
 
@@ -86,12 +91,24 @@ class MqttConnection {
             if (password.isNotEmpty()) this.password = password.toCharArray()
         }
         client = mqtt
+        Log.i(TAG, "connecting to tcp://$host:$port")
         try {
-            mqtt.connect(options).await()
-            subscribeTo.forEach { mqtt.subscribe(it, 0).await() }
+            // Paho has its own 10 s connect timeout; this is the backstop so the
+            // UI can never wait forever.
+            withTimeout(CONNECT_TIMEOUT_MS) {
+                awaitAction { listener -> mqtt.connect(options, null, listener) }
+                subscribeTo.forEach { topic -> awaitAction { listener -> mqtt.subscribe(topic, 0, null, listener) } }
+            }
+            Log.i(TAG, "connected, subscribed to $subscribeTo")
             _status.value = BrokerStatus.Connected
-        } catch (e: MqttException) {
-            val message = describe(e)
+        } catch (e: Exception) {
+            val message = when (e) {
+                is MqttException -> describe(e)
+                is TimeoutCancellationException -> "No answer from the broker"
+                else -> e.message ?: e.javaClass.simpleName
+            }
+            Log.w(TAG, "connect failed: $message", e)
+            runCatching { mqtt.disconnectForcibly(0, 0) }
             runCatching { mqtt.close(true) }
             client = null
             _status.value = BrokerStatus.Failed(message)
@@ -123,6 +140,8 @@ class MqttConnection {
                 "EPERM" in cause -> "Network access is blocked for this app (GrapheneOS: allow the Network permission)"
                 "ECONNREFUSED" in cause -> "The broker refused the connection (wrong port?)"
                 "EHOSTUNREACH" in cause || "ENETUNREACH" in cause -> "Broker not reachable: are you on the home Wi-Fi?"
+                e.cause is java.net.SocketTimeoutException ->
+                    "No answer from the broker: check the address, the home Wi-Fi, and \"Nearby devices\" permission"
                 else -> "Can't reach the broker" + if (cause.isNotEmpty()) " ($cause)" else ""
             }
         }
@@ -130,8 +149,12 @@ class MqttConnection {
     }
 }
 
-private suspend fun IMqttToken.await(): Unit = suspendCancellableCoroutine { cont ->
-    actionCallback = object : IMqttActionListener {
+/**
+ * Runs a Paho action, handing it the listener up front (so its result can't be
+ * missed), and suspends until it succeeds or fails.
+ */
+private suspend fun awaitAction(start: (IMqttActionListener) -> Unit): Unit = suspendCancellableCoroutine { cont ->
+    start(object : IMqttActionListener {
         override fun onSuccess(asyncActionToken: IMqttToken?) {
             if (cont.isActive) cont.resume(Unit)
         }
@@ -139,10 +162,8 @@ private suspend fun IMqttToken.await(): Unit = suspendCancellableCoroutine { con
         override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
             if (cont.isActive) cont.resumeWithException(exception ?: MqttException(MqttException.REASON_CODE_UNEXPECTED_ERROR.toInt()))
         }
-    }
-    // The action may have finished before the listener was set.
-    if (isComplete && cont.isActive) {
-        val error = exception
-        if (error == null) cont.resume(Unit) else cont.resumeWithException(error)
-    }
+    })
 }
+
+private const val TAG = "AirMqtt"
+private const val CONNECT_TIMEOUT_MS = 20_000L

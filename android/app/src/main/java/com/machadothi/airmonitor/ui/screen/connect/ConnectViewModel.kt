@@ -21,6 +21,8 @@ data class ConnectUiState(
     val portText: String = "1883",
     val connecting: Boolean = false,
     val error: String? = null,
+    /** Connect as soon as the screen has the local network permission (app start). */
+    val autoConnect: Boolean = false,
 )
 
 @HiltViewModel
@@ -39,8 +41,12 @@ class ConnectViewModel @Inject constructor(
         val autoConnect = savedStateHandle.toRoute<NavRoutes.Connect>().autoConnect
         viewModelScope.launch {
             val saved = repository.savedSettings()
-            _state.value = ConnectUiState(loaded = true, settings = saved, portText = saved.port.toString())
-            if (autoConnect && saved.isComplete) connect()
+            _state.value = ConnectUiState(
+                loaded = true,
+                settings = saved,
+                portText = saved.port.toString(),
+                autoConnect = autoConnect && saved.isComplete,
+            )
         }
     }
 
@@ -51,10 +57,14 @@ class ConnectViewModel @Inject constructor(
         it.copy(portText = digits, settings = it.settings.copy(port = digits.toIntOrNull() ?: 0), error = null)
     }
 
+    fun permissionDenied() = _state.update {
+        it.copy(autoConnect = false, error = "Allow \"Nearby devices\" (local network) access, or the app can't reach the broker")
+    }
+
     fun connect() {
         val settings = _state.value.settings
         if (!settings.isComplete || _state.value.connecting) return
-        _state.update { it.copy(connecting = true, error = null) }
+        _state.update { it.copy(connecting = true, error = null, autoConnect = false) }
         viewModelScope.launch {
             try {
                 repository.connect(settings)
