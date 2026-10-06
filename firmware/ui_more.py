@@ -2,6 +2,7 @@
 #   dewpoint  dew point (big), absolute humidity and a comfort word
 #   sensor    ENS160 details: state, raw resistances, compensation in use, firmware
 #   system    Wi-Fi signal, IP, MQTT/Bluetooth links, uptime
+#   clock     local time, big; weekday and date (once the board knows the time)
 # register() adds them to ui's page table, before the Display is created.
 import assets
 import gfx
@@ -16,6 +17,7 @@ def register(ui, app):
     ui._PAGES["dewpoint"] = ("Dew point", assets.ICON_DEW, page_dewpoint)
     ui._PAGES["sensor"] = ("Air sensor", assets.ICON_CHIP, page_sensor)
     ui._PAGES["system"] = ("System", assets.ICON_ANTENNA, page_system)
+    ui._PAGES["clock"] = ("Clock", assets.ICON_CLOCK, page_clock)
 
 
 def _rows(fb, rows, y=17):
@@ -85,3 +87,14 @@ def page_system(fb, air, net, history):
         ("Links", " · ".join(links) if links else "none"),
         ("Uptime", "%dh %02dm" % (up // 3600, up % 3600 // 60) if up >= 3600 else "%d min" % (up // 60)),
     ))
+
+
+def page_clock(fb, air, net, history):
+    import clock
+    t = _APP.clock.local() if _APP.clock else None
+    if t is None:
+        gfx.text_center(fb, assets.BIG, "--:--", 18)
+        gfx.text_center(fb, assets.SMALL, "time not set yet", 47)
+        return
+    gfx.text_center(fb, assets.BIG, "%02d:%02d" % (t[3], t[4]), 18)
+    gfx.text_center(fb, assets.SMALL, "%s %d %s %d" % (clock.DAYS[t[6]], t[2], clock.MONTHS[t[1] - 1], t[0]), 47)

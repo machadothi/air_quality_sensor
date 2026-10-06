@@ -62,6 +62,49 @@ class Net:
     def ip(self):
         return self.wlan.ifconfig()[0]
 
+    @property
+    def ssid(self):
+        return self._ssid
+
+    def wifi_state(self):
+        """(state, reason): state 0 idle, 1 connecting, 2 connected, 3 failed;
+        reason when failed: 1 wrong password, 2 network not found, 3 other."""
+        if self.wlan.isconnected():
+            return 2, 0
+        status = self.wlan.status()
+        if status == network.STAT_CONNECTING:
+            return 1, 0
+        if status == getattr(network, "STAT_WRONG_PASSWORD", -1):
+            return 3, 1
+        if status == getattr(network, "STAT_NO_AP_FOUND", -1):
+            return 3, 2
+        if status == network.STAT_IDLE:
+            return 0, 0
+        return 3, 3
+
+    def set_wifi(self, ssid, password):
+        """Switch to another network (from the app)."""
+        print("Wi-Fi: switching to", ssid)
+        self._ssid, self._password = ssid, password
+        self._drop_mqtt()
+        try:
+            self.wlan.disconnect()
+        except OSError:
+            pass
+        self.wlan.connect(ssid, password)
+        self._wifi_retry = time.ticks_add(time.ticks_ms(), 30000)
+        self._was_wifi_ok = False
+
+    def scan(self):
+        """Networks in range, strongest first: [(name, rssi)], at most 10.
+        Blocks for about 3 s."""
+        best = {}
+        for net in self.wlan.scan():
+            name = net[0].decode("utf-8", "replace") if net[0] else ""
+            if name and (name not in best or net[3] > best[name]):
+                best[name] = net[3]
+        return sorted(best.items(), key=lambda item: -item[1])[:10]
+
     # --- main loop -----------------------------------------------------------------
 
     def poll(self):
@@ -81,6 +124,8 @@ class Net:
             self._was_wifi_ok = True
             print("Wi-Fi: connected,", self.ip())
 
+        if not self.cfg["enabled"]:   # switched off in the app
+            return
         if self.mqtt is None:
             if time.ticks_diff(now, self._mqtt_retry) >= 0:
                 self._connect_mqtt()
@@ -131,6 +176,17 @@ class Net:
             import home_assistant   # loaded only for this, then dropped (RAM)
             home_assistant.announce(self)
             del sys.modules["home_assistant"]
+
+    def stop_mqtt(self):
+        """Leave cleanly: tell the broker (and Home Assistant) we're offline."""
+        if self.mqtt is None:
+            return
+        try:
+            self.mqtt.publish(self.topic_availability, b"offline", True)
+            self.mqtt.disconnect()
+        except OSError:
+            pass
+        self._drop_mqtt()
 
     def _drop_mqtt(self):
         if self.mqtt is None:

@@ -26,7 +26,7 @@ OUT_BIN = OUT.with_suffix(".bin")
 # name: (ttf file, pixel size, characters, letter spacing)
 FONTS = {
     # Big readings. Only what a number needs.
-    "BIG": ("DejaVuSans-Bold.ttf", 32, "0123456789.-", 2),
+    "BIG": ("DejaVuSans-Bold.ttf", 32, "0123456789.-:", 2),
     # Air-quality rating and units.
     "MID": ("DejaVuSans-Bold.ttf", 15, " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.%°-³", 1),
     # Titles and small text.
@@ -143,6 +143,20 @@ ICONS = {
         .....##.....
         ....####....
         ....####....
+        ...######...
+        ............
+    """,
+    "clock": """
+        ...######...
+        ..#......#..
+        .#...#....#.
+        #....#.....#
+        #....#.....#
+        #....####..#
+        #..........#
+        #..........#
+        .#........#.
+        ..#......#..
         ...######...
         ............
     """,

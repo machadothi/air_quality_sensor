@@ -28,7 +28,7 @@ PLATFORM = sys.platform
 
 # Display pages, in their default order. The ESP32 has the extra ones (ui_more.py).
 PAGE_NAMES = ("air", "eco2", "tvoc", "temperature", "humidity") + (
-    ("dewpoint", "sensor", "system") if PLATFORM == "esp32" else ())
+    ("dewpoint", "sensor", "system", "clock") if PLATFORM == "esp32" else ())
 
 # Default pins per board; config.json "pins" overrides them.
 # display_reset: the OLED's RES pin, if wired (the 7-pin 2.42" modules need a
@@ -54,14 +54,20 @@ def load_config():
     """config.json, completed with defaults, then settings.json on top."""
     defaults = {
         "mqtt": {
+            "enabled": True,                        # False: no MQTT at all (switch in the app)
             "port": 0,                              # 0 = 1883
             "topic_state": "esp/air_quality_sensor",
             "publish_s": 60,                        # readings are averaged over this time
             "home_assistant_discovery": False,
             "device_name": "Air Monitor",
         },
+        "time": {                                   # ESP32: set by the app from the phone's zone
+            "offset_min": 0,                        # standard offset from UTC, minutes
+            "dst": 0,                               # summer time rule: 0 none, 1 EU, 2 US
+        },
         "sensor": {
             "temperature_offset": 0.0,              # °C added to the AHT21 reading
+            "calibration_hour": 3,                  # nightly automatic measurement, local time
             "auto_calibration": False,              # measure the offset automatically (selfcal.py)
             "calibration_interval_h": 24,
             "cooldown_min": 20,                     # longest cooling period of a measurement
@@ -95,9 +101,17 @@ def load_config():
             cfg.setdefault(section, values)
     if cfg.get("devices", {}).get("display") is False:   # the old firmware's switch
         cfg["display"]["enabled"] = False
+    cfg["wifi_from_app"] = False
+    cfg["config_wifi"] = dict(cfg["wifi"])   # to go back to after "forget"
     try:
         with open(SETTINGS_FILE) as f:
             saved = json.load(f)
+        if saved.get("wifi"):   # a network chosen in the app wins over config.json
+            cfg["wifi"].update(saved["wifi"])
+            cfg["wifi_from_app"] = True
+        cfg["time"].update(saved.get("time", {}))
+        if "mqtt_enabled" in saved:
+            cfg["mqtt"]["enabled"] = saved["mqtt_enabled"]
         cfg["display"].update(saved.get("display", {}))
         cfg["bluetooth"].update(saved.get("bluetooth", {}))
         cfg["sensor"].update(saved.get("sensor", {}))
@@ -126,7 +140,9 @@ class App:
     def __init__(self):
         global _display
         self.cfg = cfg = load_config()
-        self.boot_s = time.time()
+        # Uptime from the tick counter: time.time() jumps when the clock gets set.
+        self._uptime_ms = 0
+        self._uptime_tick = time.ticks_ms()
         self.reboot_at = None
         self.last_feed = time.ticks_ms()
         if PLATFORM == "esp8266":
@@ -149,9 +165,11 @@ class App:
 
         self.air = sensors.AirSensor(i2c, cfg["sensor"]["temperature_offset"])
         self.net = Net(cfg["wifi"], cfg["mqtt"], self.on_request)
-        self.ble = self.selfcal = None
+        self.ble = self.selfcal = self.clock = None
         if PLATFORM == "esp32":
+            import clock
             import selfcal
+            self.clock = clock.Clock(cfg["time"])
             self.selfcal = selfcal.SelfCalibration(self)
         if PLATFORM == "esp32" and cfg["bluetooth"]["enabled"]:
             import ble
@@ -163,13 +181,48 @@ class App:
         """Store what was changed over MQTT or Bluetooth (display pages,
         timing and rotation, Bluetooth name, temperature offset) in
         settings.json; config.json stays untouched."""
-        display, bt = self.cfg["display"], self.cfg["bluetooth"]
+        cfg = self.cfg
+        display, bt = cfg["display"], cfg["bluetooth"]
         with open(SETTINGS_FILE, "w") as f:
-            json.dump({"display": {"pages": display["pages"], "page_s": display["page_s"],
+            json.dump({"wifi": cfg["wifi"] if cfg["wifi_from_app"] else None,
+                       "time": cfg["time"],
+                       "mqtt_enabled": cfg["mqtt"]["enabled"],
+                       "display": {"pages": display["pages"], "page_s": display["page_s"],
                                    "rotate": display["rotate"]},
                        "bluetooth": {"name": bt["name"]},
                        "sensor": {"temperature_offset": self.air.offset,
-                                  "auto_calibration": self.cfg["sensor"]["auto_calibration"]}}, f)
+                                  "auto_calibration": self.cfg["sensor"]["auto_calibration"],
+                                  "last_result": self.selfcal.result if self.selfcal else None}}, f)
+
+    def set_wifi(self, ssid, password):
+        """A network chosen in the app; stored in settings.json."""
+        self.cfg["wifi"] = {"ssid": ssid, "password": password}
+        self.cfg["wifi_from_app"] = True
+        self.save_settings()
+        self.net.set_wifi(ssid, password)
+
+    def set_mqtt(self, enabled):
+        """MQTT on/off (from the app); stored in settings.json."""
+        self.cfg["mqtt"]["enabled"] = enabled
+        self.save_settings()
+        if not enabled:
+            self.net.stop_mqtt()
+        print("MQTT", "on" if enabled else "off")
+
+    def forget_wifi(self):
+        """Back to the network in config.json."""
+        wifi = self.cfg["config_wifi"]
+        self.cfg["wifi"] = dict(wifi)
+        self.cfg["wifi_from_app"] = False
+        self.save_settings()
+        self.net.set_wifi(wifi["ssid"], wifi["password"])
+
+    def set_time(self, unix_utc, offset_min, dst):
+        """Time and zone from the phone (Bluetooth)."""
+        self.cfg["time"].update({"offset_min": offset_min, "dst": dst})
+        self.save_settings()
+        if self.clock:
+            self.clock.set_utc(unix_utc, 2)
 
     def set_temperature_offset(self, offset):
         """°C added to the AHT21's temperature (it reads high: the ENS160 next to
@@ -191,7 +244,7 @@ class App:
         self.reboot_at = time.ticks_add(time.ticks_ms(), 500)
 
     def uptime_s(self):
-        return time.time() - self.boot_s
+        return (self._uptime_ms + time.ticks_diff(time.ticks_ms(), self._uptime_tick)) // 1000
 
     def system_info(self):
         """The board itself: shown in the app (Bluetooth), /status and the system page."""
@@ -213,6 +266,11 @@ class App:
             import esp32
             # Die temperature, uncalibrated: runs well above room temperature.
             info["chip_temperature"] = (esp32.raw_temperature() - 32) / 1.8
+        if self.clock:
+            import clock
+            t = self.clock.local()
+            info["time"] = None if t is None else "%04d-%02d-%02d %02d:%02d" % t[:5]
+            info["time_source"] = clock.SOURCES[self.clock.source]
         return info
 
     def sensor_state(self):
@@ -293,6 +351,10 @@ class App:
         try:
             while True:
                 self.last_feed = now
+                self._uptime_ms += time.ticks_diff(now, self._uptime_tick)
+                self._uptime_tick = now
+                if self.clock:
+                    self.clock.poll(net.wifi_ok)
                 air.update()
                 net.poll()
                 if self.selfcal:

@@ -47,10 +47,12 @@ and their layouts match the Thunderboard firmware's `ble_protocol.h`.
 | 06 | Info | read | 4 | protocol version `1`, board id `0x0C`, sensors `0x41` (bit 0 temperature/humidity, bit 6 air quality), reserved |
 | 07 | Command | write | 1 | `0x02` factory reset, `0x03` reboot, `0x04` identify (the display flashes for 3 s) |
 | 08 | Name | read, write | ≤ 20 | UTF-8; stored, advertised from the next advertising round |
-| 09 | Display | read, write | 6 | `present` (u8), `page_mask` (u16), `page_ms` (u16, 1000–60000), `flags` (u8, bit 0 = rotated 180°). A 5-byte write (Thunderboard clients) leaves the rotation as it is. |
+| 09 | Display | read, write | 7 | `present` (u8), `page_mask` (u16), `page_ms` (u16, 1000–60000), `flags` (u8, bit 0 = rotated 180°), page bits 16–23 (u8). A 5-byte write (Thunderboard clients) leaves the rest as it is. |
 | 0A | **Air** | read, notify (every 2 s) | 22 | see below |
 | 0B | **System** | read, notify (every 5 s) | 32 | the ESP32 itself, see below |
 | 0C | **Calibration** | read, write, notify (every 5 s) | 20 | temperature offset and self-heating measurement, see below |
+| 0D | **Time** | read, write | 12 / 7 | the board's clock, see below |
+| 0E | **Wi-Fi** | read, write, notify (on change) | ≤ 512 | network, scan, MQTT on/off, see below |
 
 **Air** (new for this board):
 
@@ -109,10 +111,25 @@ Write 2 bytes (`i16` offset × 100) to set the offset, or 4 bytes: offset,
 automatic on/off, command (0 none, 1 start a measurement, 2 cancel). See
 [sensors.md](sensors.md#temperature-offset) for the measurement.
 
+**Time** (read, 12 bytes): u32 Unix time UTC (0 = not known), i16 standard
+offset from UTC in minutes, u8 summer-time rule (0 none, 1 EU, 2 US), u8 source
+(0 unknown, 1 internet, 2 phone), i16 offset in effect now (minutes), u16
+reserved. **Write** 7 bytes: u32 Unix time, i16 standard offset, u8 rule. The
+app does this on every connect, from the phone's clock and time zone; with
+Wi-Fi the board also syncs from the internet (NTP) every 6 hours.
+
+**Wi-Fi** (read): u8 state (0 idle, 1 connecting, 2 connected, 3 failed), u8
+failure (1 wrong password, 2 not found, 3 other), i8 RSSI, 4 bytes IP, u8 SSID
+length + SSID, u8 scanning, u8 MQTT flags (bit 0 on, bit 1 connected), u8
+count, then per network: u8 name length + name + i8 RSSI (at most 10).
+**Write**: `1` scan (the board blocks ~3 s), `2, len, SSID, len, password`
+connect (stored in `settings.json`), `3` back to `config.json`'s network, `4` /
+`5` MQTT on / off. The password travels unencrypted over Bluetooth.
+
 **Display page bits** (`page_mask`): bit 0 temperature, bit 1 humidity,
 bit 10 air quality, bit 11 eCO2, bit 12 TVOC, bit 13 dew point, bit 14 air
-sensor details, bit 15 system. Bits 0–9 are the same as on the Thunderboard;
-bits 10–15 are this board's pages.
+sensor details, bit 15 system, bit 16 clock (in the 7th byte of the Display
+value: page bits 16–23). Bits 0–9 are the same as on the Thunderboard.
 - **Order is kept.** A mask has no order: the pages you keep stay in their
   current order, newly enabled ones are added at the end. The order itself can
   be changed over MQTT (`/display`).

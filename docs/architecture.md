@@ -34,6 +34,7 @@ missing.
 | `home_assistant.py` | Home Assistant MQTT discovery messages; **loaded only when enabled**, after each MQTT connect | `net` |
 | `ble.py` | ESP32 only: Bluetooth LE GATT service (the BLE Sensor protocol) and BTHome broadcasts, see [bluetooth.md](bluetooth.md) | `bluetooth`, `app` |
 | `ui.py` | the pages, header/footer, slide transition, the chart history | `ssd1306`, `gfx` |
+| `clock.py` | ESP32 only: wall-clock time from NTP or the phone, time zone and EU/US summer time | `ntptime`, `machine.RTC` |
 | `selfcal.py` | ESP32 only: measures the temperature offset by putting the ENS160 to sleep | `sensors`, `app` |
 | `ui_more.py` | ESP32 only: the extra display pages (dew point, sensor details, system) | `ui`, `sensors` |
 | `gfx.py` | proportional text, icons, sparklines on top of `framebuf`; reads glyphs from `assets.bin` | `framebuf`, `assets` |

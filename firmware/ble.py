@@ -45,8 +45,9 @@ PAGE_MS_MAX = const(60000)
 
 # Display.page_mask bits shared with the Thunderboard; 10-12 are this board's.
 PAGE_BITS = {"temperature": 1 << 0, "humidity": 1 << 1, "air": 1 << 10, "eco2": 1 << 11, "tvoc": 1 << 12,
-             "dewpoint": 1 << 13, "sensor": 1 << 14, "system": 1 << 15}
-_PAGE_ORDER = ("air", "eco2", "tvoc", "temperature", "humidity", "dewpoint", "sensor", "system")   # app.PAGE_NAMES
+             "dewpoint": 1 << 13, "sensor": 1 << 14, "system": 1 << 15,
+             "clock": 1 << 16}   # bits 16+ go in the Display value's 7th byte
+_PAGE_ORDER = ("air", "eco2", "tvoc", "temperature", "humidity", "dewpoint", "sensor", "system", "clock")
 
 # Air.state values: the ENS160 validity, or 0xFF without a sensor.
 _STATE_NO_SENSOR = const(0xFF)
@@ -71,7 +72,11 @@ _DISPLAY = (_uuid(0x09), _FLAG_READ | _FLAG_WRITE)
 _AIR = (_uuid(0x0A), _FLAG_READ | _FLAG_NOTIFY)
 _SYSTEM = (_uuid(0x0B), _FLAG_READ | _FLAG_NOTIFY)
 _CALIBRATION = (_uuid(0x0C), _FLAG_READ | _FLAG_WRITE | _FLAG_NOTIFY)
-_SERVICE = (_SERVICE_UUID, (_ENV, _INFO, _COMMAND, _NAME, _DISPLAY, _AIR, _SYSTEM, _CALIBRATION))
+_TIME = (_uuid(0x0D), _FLAG_READ | _FLAG_WRITE)
+_WIFI = (_uuid(0x0E), _FLAG_READ | _FLAG_WRITE | _FLAG_NOTIFY)
+_SERVICE = (_SERVICE_UUID, (_ENV, _INFO, _COMMAND, _NAME, _DISPLAY, _AIR, _SYSTEM, _CALIBRATION, _TIME, _WIFI))
+
+_UNIX_2000 = const(946684800)
 
 
 def _ad(ad_type, payload):
@@ -89,11 +94,16 @@ class Ble:
         self.bthome = cfg["bthome"]
         self.ble.config(gap_name=self.name)
         ((self.h_env, self.h_info, self.h_command, self.h_name, self.h_display, self.h_air, self.h_system,
-          self.h_calibration),) = \
+          self.h_calibration, self.h_time, self.h_wifi),) = \
             self.ble.gatts_register_services((_SERVICE,))
         self.ble.gatts_set_buffer(self.h_name, NAME_MAX)
         self.ble.gatts_set_buffer(self.h_display, 6)
         self.ble.gatts_set_buffer(self.h_calibration, 20)
+        self.ble.gatts_set_buffer(self.h_time, 12)
+        self.ble.gatts_set_buffer(self.h_wifi, 512)
+        self.scan_results = []
+        self.scanning = False
+        self._wifi_value = b""
         self.ble.irq(self._irq)
         self.connection = None
         self.pending = []          # writes from the IRQ, handled in poll()
@@ -107,6 +117,8 @@ class Ble:
         self.ble.gatts_write(self.h_name, self.name.encode())
         self.write_display()
         self.write_calibration()
+        self.write_time()
+        self.write_wifi(notify=False)
         self._update_values(notify=False)
         print("Bluetooth: advertising as", self.name)
 
@@ -119,10 +131,16 @@ class Ble:
         if time.ticks_diff(now, self._next_update) >= 0:
             self._next_update = time.ticks_add(now, _UPDATE_MS)
             self._update_values(notify=self.connection is not None)
+            self.write_wifi(notify=self.connection is not None)
         if time.ticks_diff(now, self._next_system) >= 0:
             self._next_system = time.ticks_add(now, _SYSTEM_MS)
             self._update_system(notify=self.connection is not None)
             self.write_calibration(notify=self.connection is not None)
+            self.write_time()
+        if self.scanning:   # requested from the app: blocks ~3 s
+            self.scan_results = self.app.net.scan()
+            self.scanning = False
+            self.write_wifi(notify=self.connection is not None)
         if time.ticks_diff(now, self._next_adv) >= 0:
             self._next_adv = time.ticks_add(now, _ADV_SWITCH_MS)
             self._advertise()
@@ -191,9 +209,37 @@ class Ble:
         mask = 0
         for page in cfg["pages"]:
             mask |= PAGE_BITS.get(page, 0)
-        # 6 bytes: the Thunderboard's 5 plus flags (bit 0: rotated 180°).
+        # 7 bytes: the Thunderboard's 5, flags (bit 0: rotated 180°), page bits 16-23.
         self.ble.gatts_write(self.h_display, struct.pack(
-            "<BHHB", 1 if self.app.display else 0, mask, int(cfg["page_s"] * 1000), 1 if cfg["rotate"] else 0))
+            "<BHHBB", 1 if self.app.display else 0, mask & 0xFFFF, int(cfg["page_s"] * 1000),
+            1 if cfg["rotate"] else 0, mask >> 16))
+
+    def write_time(self):
+        """Time: u32 Unix time UTC (0 = unknown), i16 standard offset (min),
+        u8 summer-time rule, u8 source, i16 current offset (min), u16 reserved."""
+        clock = self.app.clock
+        known = clock is not None and clock.known()
+        self.ble.gatts_write(self.h_time, struct.pack(
+            "<IhBBhH", clock.utc() + _UNIX_2000 if known else 0, self.app.cfg["time"]["offset_min"],
+            self.app.cfg["time"]["dst"], clock.source if clock else 0, clock.offset_min() if known else 0, 0))
+
+    def write_wifi(self, notify):
+        """Wi-Fi: state, reason, rssi, IP, SSID, scanning, scan results. Notified when it changes."""
+        net = self.app.net
+        state, reason = net.wifi_state()
+        ip = bytes(int(p) for p in net.ip().split(".")) if state == 2 else b"\0\0\0\0"
+        ssid = net.ssid.encode()[:32]
+        value = struct.pack("<BBb4sB", state, reason, net.rssi() if state == 2 else 0, ip, len(ssid)) + ssid
+        mqtt = (1 if self.app.cfg["mqtt"]["enabled"] else 0) | (2 if net.mqtt_ok else 0)
+        value += bytes((1 if self.scanning else 0, mqtt, len(self.scan_results)))
+        for name, rssi in self.scan_results:
+            name = name.encode()[:32]
+            value += bytes((len(name),)) + name + struct.pack("b", rssi)
+        if value != self._wifi_value:
+            self._wifi_value = value
+            self.ble.gatts_write(self.h_wifi, value)
+            if notify:
+                self._notify(((self.h_wifi, value),))
 
     def write_calibration(self, notify=False):
         """Calibration (20 bytes): offset and the self-heating measurement's
@@ -291,6 +337,26 @@ class Ble:
                 self.ble.config(gap_name=name)
                 print("Bluetooth: renamed to", name)
             self.ble.gatts_write(self.h_name, self.name.encode())
+        elif handle == self.h_time and len(value) == 7:
+            unix, offset, dst = struct.unpack("<IhB", value)
+            app.set_time(unix, offset, dst)
+            self.write_time()
+        elif handle == self.h_wifi and value:
+            # 1: scan. 2, len, SSID, len, password: connect. 3: back to config.json's
+            # network. 4 / 5: MQTT on / off.
+            if value[0] == 1:
+                self.scanning = True
+                self.write_wifi(notify=True)
+            elif value[0] == 2 and len(value) >= 3:
+                n = value[1]
+                ssid = value[2:2 + n].decode()
+                password = value[3 + n:3 + n + value[2 + n]].decode() if len(value) > 2 + n else ""
+                app.set_wifi(ssid, password)
+            elif value[0] == 3:
+                app.forget_wifi()
+            elif value[0] in (4, 5):
+                app.set_mqtt(value[0] == 4)
+            self.write_wifi(notify=True)
         elif handle == self.h_calibration:
             # 2 bytes: offset. 4 bytes: offset, auto (0/1), command (1 start, 2 cancel).
             if len(value) in (2, 4):
@@ -312,10 +378,12 @@ class Ble:
         elif handle == self.h_display:
             # A rejected write can't be refused over the air from MicroPython:
             # the old value is written back, and the app sees it on its next read.
-            if len(value) in (5, 6):
+            if len(value) in (5, 6, 7):
                 _, mask, page_ms = struct.unpack("<BHH", value[:5])
+                if len(value) == 7:
+                    mask |= value[6] << 16
                 cfg = app.cfg["display"]
-                if len(value) == 6:   # flags; a 5-byte write leaves the rotation alone
+                if len(value) >= 6:   # flags; a 5-byte write leaves the rotation alone
                     cfg["rotate"] = bool(value[5] & 1)
                     if app.display:
                         app.display.set_rotate(cfg["rotate"])

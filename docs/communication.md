@@ -20,6 +20,10 @@ Register details are in [sensors.md](sensors.md).
 
 ## Wi-Fi
 
+The network can also be chosen in the app (ESP32): Settings → Wi-Fi, time &
+MQTT → Choose network. It's stored in `settings.json` and wins over
+`config.json`; "Use configured" goes back.
+
 `net.py` uses the station interface (`network.WLAN(network.STA_IF)`) and
 switches off the ESP8266's default access point, which MicroPython leaves on
 as an open-looking network called `MicroPython-xxxxxx`.
@@ -148,6 +152,7 @@ topic_sub, topic_pub) are required; the rest falls back to
 |---|---|---|
 | `esp` | – | ignored: the board type is detected |
 | `wifi.ssid` / `wifi.password` | | your network |
+| `mqtt.enabled` | true | false = no MQTT; switchable in the app (Settings → Wi-Fi, time & MQTT), stored in `settings.json` |
 | `mqtt.server` | | broker IP or host name |
 | `mqtt.port` | 0 (= 1883) | |
 | `mqtt.client_id` | | unique per device; part of the topics |
@@ -161,7 +166,8 @@ topic_sub, topic_pub) are required; the rest falls back to
 | `bluetooth.enabled` / `bthome` / `name` | true / true / "" | ESP32 only, see [bluetooth.md](bluetooth.md#settings) |
 | `pins.<board>.display_reset` | GPIO4 (ESP32), none (ESP8266) | OLED reset pin for 7-pin modules |
 | `sensor.temperature_offset` | 0.0 | °C added to the temperature ([sensors.md](sensors.md#temperature-offset)); settable from the app / `/offset` |
-| `sensor.auto_calibration` | false | measure the offset automatically every `calibration_interval_h` (24) hours (ESP32) |
+| `sensor.auto_calibration` | false | measure the offset automatically: nightly at `calibration_hour` (3, local) once the board knows the time, else every `calibration_interval_h` (24) hours (ESP32) |
+| `time.offset_min` / `time.dst` | 0 / 0 | time zone (minutes from UTC, summer-time rule 0 none, 1 EU, 2 US); set by the app from the phone |
 | `sensor.cooldown_min` | 20 | longest cooling time of a measurement |
 | `display.enabled` | true | |
 | `display.address` | 0x3C (60) | OLED I2C address |

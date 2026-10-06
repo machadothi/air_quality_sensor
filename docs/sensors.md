@@ -152,7 +152,7 @@ Calibration), over MQTT (`/offset -2.0`), or in `config.json`
 switches the ENS160's heaters off and watches how far its temperature drops.
 1. **Warm:** the AHT21's uncorrected temperature, averaged over the last minute.
 2. **Cool down:** the ENS160 goes to deep sleep. The firmware waits until the
-   temperature changes by less than 0.05 °C in 2 minutes: at least 5 minutes,
+   temperature changes by less than 0.03 °C in 3 minutes: at least 10 minutes,
    at most `cooldown_min` (20).
 3. **Result:** cool minus warm (averaged again) is the offset. It's applied and
    saved, and the ENS160 measures again after its 3-minute warm-up.
@@ -160,8 +160,10 @@ switches the ENS160's heaters off and watches how far its temperature drops.
    run, so the result is thrown away ("room temperature changed").
 
 Start it from the app (Calibration → Measure now) or over MQTT
-(`/calibrate start`). With "Daily" on (`/calibrate auto on`), it runs every
-`calibration_interval_h` hours (24), once the ENS160 has run an hour. While it
+(`/calibrate start`). With "Nightly" on (`/calibrate auto on`), it runs once a
+night at `calibration_hour` (03:00 local) when the board knows the time (from
+the internet or the phone), otherwise every `calibration_interval_h` hours
+(24); always only after the ENS160 has run an hour. While it
 runs, the display and the app show "Calibrating", and there are no air
 readings. The result depends on airflow: measure again after moving the board
 or putting it in a case.

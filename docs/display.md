@@ -34,6 +34,7 @@ build such a UI**, step by step, so you can change it or reuse the approach.
 | `dewpoint` | dew point, big; absolute humidity and comfort below (ESP32) |
 | `sensor` | ENS160 firmware and state, raw resistances R1/R4, the compensation it uses (ESP32) |
 | `system` | Wi-Fi signal, IP, links (MQTT, Bluetooth), uptime (ESP32) |
+| `clock` | local time, big; weekday and date (ESP32, once the board knows the time) |
 
 The last three are in `firmware/ui_more.py`, which only the ESP32 loads: the
 ESP8266 has no RAM to spare for them.

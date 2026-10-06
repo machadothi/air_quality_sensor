@@ -5,16 +5,17 @@
 #   1. warm:  the AHT21's uncorrected temperature, averaged over the last minute,
 #             with the ENS160 measuring normally;
 #   2. cool:  the ENS160 goes to sleep (heaters off) until the temperature stops
-#             falling: less than STABLE_C change in 2 minutes, after at least
-#             MIN_COOL_S, at most cooldown_min;
+#             falling: less than STABLE_C change in 3 minutes, after at least
+#             10 minutes, at most cooldown_min;
 #   3. cool temperature averaged over the last minute;
 #      offset = cool - warm (negative), applied and stored;
 #   4. the ENS160 measures again (3-minute warm-up).
 # A rise instead of a fall means the room changed during the run: rejected.
 #
 # Started from the app (Calibration characteristic), over MQTT (/calibrate start),
-# or automatically every interval_h hours when "auto" is on, but only after the
-# ENS160 has run long enough for the board to be fully warm (WARM_FOR_S).
+# or automatically when "auto" is on: once a night at calibration_hour (local
+# time, when the board knows the time), else every calibration_interval_h hours;
+# only after the ENS160 has run long enough for the board to be fully warm.
 import time
 
 from micropython import const
@@ -34,9 +35,9 @@ REASONS = {NO_SENSOR: "sensor not answering", ROOM_CHANGED: "room temperature ch
            CANCELLED: "cancelled", TOO_LARGE: "result out of range"}
 
 _SAMPLE_MS = const(10000)   # one temperature sample every 10 s
-_SAMPLES = const(13)        # two minutes of them (+1)
-_MIN_COOL_S = const(300)
-_STABLE_C = 0.05
+_SAMPLES = const(19)        # three minutes of them (+1)
+_MIN_COOL_S = const(600)    # a board cools slowly at the end: don't stop before 10 min
+_STABLE_C = 0.03
 _WARM_FOR_S = const(3600)   # automatic runs: the ENS160 must have run this long
 
 
@@ -45,12 +46,16 @@ class SelfCalibration:
         self.app = app
         self.state = IDLE
         self.reason = 0
-        self.warm = self.cool = self.result = None
-        self.result_at = None     # ticks of the last result
+        self.warm = self.cool = None
+        self.result = app.cfg["sensor"].get("last_result")   # survives restarts (settings.json)
+        self.result_at = None     # ticks of the last result (since this start)
+        if self.result is not None:
+            self.state = DONE
         self.started = 0
         self.samples = []         # uncorrected temperatures, newest last
         self._next_sample = time.ticks_ms()
         self._ens_since = time.ticks_ms()   # since when the ENS160 runs undisturbed
+        self._night_done = None             # day of the year of the last nightly run
 
     @property
     def cfg(self):
@@ -107,11 +112,17 @@ class SelfCalibration:
         if self.running:
             self._poll_cooling(air)
         elif self.cfg["auto_calibration"]:
-            since = self.result_at if self.result_at is not None else self._ens_since
-            due = time.ticks_diff(now, since) // 1000 >= self.cfg["calibration_interval_h"] * 3600
+            local = self.app.clock.local() if self.app.clock else None
+            if local:   # the board knows the time: at night, once
+                due = local[3] == self.cfg["calibration_hour"] and self._night_done != local[7]
+            else:
+                since = self.result_at if self.result_at is not None else self._ens_since
+                due = time.ticks_diff(now, since) // 1000 >= self.cfg["calibration_interval_h"] * 3600
             warm = time.ticks_diff(now, self._ens_since) // 1000 >= _WARM_FOR_S
             if due and warm and air.valid:
                 print("Self-heating measurement: automatic run")
+                if local:
+                    self._night_done = local[7]
                 self.start()
 
     def _poll_cooling(self, air):
