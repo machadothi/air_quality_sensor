@@ -6,7 +6,7 @@ import time
 
 from app import PAGE_NAMES   # already loaded, costs nothing
 
-REQUESTS = ("/read_all", "/status", "/display", "/display/next", "/topics", "/reboot")
+REQUESTS = ("/read_all", "/status", "/display", "/display/next", "/offset", "/topics", "/reboot")
 _DISPLAY_USAGE = '/display {"pages": [...], "page_s": 1-60, "rotate": true/false}'
 
 
@@ -53,6 +53,16 @@ def handle(app, text):
         return status
     if text == "/display" or text.startswith("/display {"):
         return _display(app, text)
+    if text == "/offset" or text.startswith("/offset "):
+        # /offset: the temperature offset; /offset -2.0: set it (°C, -10 to 10)
+        if text != "/offset":
+            try:
+                app.set_temperature_offset(float(text[8:]))
+            except ValueError as e:
+                return {"error": str(e)}
+            if app.ble:
+                app.ble.write_calibration()   # keep the Bluetooth value in step
+        return {"temperature_offset": app.air.offset, "temperature": app.air.temperature}
     if text == "/display/next" and app.display:
         app.display.next_page(app.air, net, app.history)
         return {"page": app.display.pages[app.display.index]}

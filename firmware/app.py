@@ -38,6 +38,9 @@ DEFAULT_PINS = {
     "esp32": {"i2c_scl": 22, "i2c_sda": 21, "display_reset": 4},
 }
 
+OFFSET_MIN = -10         # allowed temperature offset, °C
+OFFSET_MAX = 10
+
 _REFRESH_MS = 1000       # redraw the shown page
 _HISTORY_MS = 60000      # one chart point a minute
 _MEMORY_MS = 10000       # track the lowest free RAM
@@ -92,6 +95,7 @@ def load_config():
             saved = json.load(f)
         cfg["display"].update(saved.get("display", {}))
         cfg["bluetooth"].update(saved.get("bluetooth", {}))
+        cfg["sensor"].update(saved.get("sensor", {}))
     except (OSError, ValueError, AttributeError):   # nothing saved yet, or a damaged file
         pass
     return cfg
@@ -148,13 +152,24 @@ class App:
         self.min_free = gc.mem_free()
 
     def save_settings(self):
-        """Store what was changed over MQTT or Bluetooth (display pages and
-        timing, Bluetooth name) in settings.json; config.json stays untouched."""
+        """Store what was changed over MQTT or Bluetooth (display pages,
+        timing and rotation, Bluetooth name, temperature offset) in
+        settings.json; config.json stays untouched."""
         display, bt = self.cfg["display"], self.cfg["bluetooth"]
         with open(SETTINGS_FILE, "w") as f:
             json.dump({"display": {"pages": display["pages"], "page_s": display["page_s"],
                                    "rotate": display["rotate"]},
-                       "bluetooth": {"name": bt["name"]}}, f)
+                       "bluetooth": {"name": bt["name"]},
+                       "sensor": {"temperature_offset": self.air.offset}}, f)
+
+    def set_temperature_offset(self, offset):
+        """°C added to the AHT21's temperature (it reads high: the ENS160 next to
+        it heats the board). Humidity and the ENS160's compensation follow."""
+        if not OFFSET_MIN <= offset <= OFFSET_MAX:
+            raise ValueError("offset must be %d to %d °C" % (OFFSET_MIN, OFFSET_MAX))
+        self.air.offset = self.cfg["sensor"]["temperature_offset"] = round(offset, 2)
+        self.save_settings()
+        print("Temperature offset:", self.air.offset, "°C")
 
     def factory_reset(self):
         """Forget settings.json (back to config.json) and restart."""

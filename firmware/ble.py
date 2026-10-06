@@ -70,7 +70,8 @@ _NAME = (_uuid(0x08), _FLAG_READ | _FLAG_WRITE)
 _DISPLAY = (_uuid(0x09), _FLAG_READ | _FLAG_WRITE)
 _AIR = (_uuid(0x0A), _FLAG_READ | _FLAG_NOTIFY)
 _SYSTEM = (_uuid(0x0B), _FLAG_READ | _FLAG_NOTIFY)
-_SERVICE = (_SERVICE_UUID, (_ENV, _INFO, _COMMAND, _NAME, _DISPLAY, _AIR, _SYSTEM))
+_CALIBRATION = (_uuid(0x0C), _FLAG_READ | _FLAG_WRITE)
+_SERVICE = (_SERVICE_UUID, (_ENV, _INFO, _COMMAND, _NAME, _DISPLAY, _AIR, _SYSTEM, _CALIBRATION))
 
 
 def _ad(ad_type, payload):
@@ -87,7 +88,8 @@ class Ble:
         self.name = cfg["name"] or "Air-Monitor-%02X%02X" % (mac[4], mac[5])
         self.bthome = cfg["bthome"]
         self.ble.config(gap_name=self.name)
-        ((self.h_env, self.h_info, self.h_command, self.h_name, self.h_display, self.h_air, self.h_system),) = \
+        ((self.h_env, self.h_info, self.h_command, self.h_name, self.h_display, self.h_air, self.h_system,
+          self.h_calibration),) = \
             self.ble.gatts_register_services((_SERVICE,))
         self.ble.gatts_set_buffer(self.h_name, NAME_MAX)
         self.ble.gatts_set_buffer(self.h_display, 6)
@@ -103,6 +105,7 @@ class Ble:
                                                       _SENSOR_RHT | _SENSOR_AIR, 0))
         self.ble.gatts_write(self.h_name, self.name.encode())
         self.write_display()
+        self.write_calibration()
         self._update_values(notify=False)
         print("Bluetooth: advertising as", self.name)
 
@@ -190,6 +193,10 @@ class Ble:
         self.ble.gatts_write(self.h_display, struct.pack(
             "<BHHB", 1 if self.app.display else 0, mask, int(cfg["page_s"] * 1000), 1 if cfg["rotate"] else 0))
 
+    def write_calibration(self):
+        """Calibration: i16 temperature offset, °C × 100."""
+        self.ble.gatts_write(self.h_calibration, struct.pack("<h", int(round(self.app.air.offset * 100))))
+
     # --- advertising ------------------------------------------------------------
 
     def _app_packet(self):
@@ -265,6 +272,13 @@ class Ble:
                 self.ble.config(gap_name=name)
                 print("Bluetooth: renamed to", name)
             self.ble.gatts_write(self.h_name, self.name.encode())
+        elif handle == self.h_calibration:
+            if len(value) == 2:
+                try:
+                    app.set_temperature_offset(struct.unpack("<h", value)[0] / 100)
+                except ValueError as e:
+                    print("Bluetooth:", e)
+            self.write_calibration()
         elif handle == self.h_display:
             # A rejected write can't be refused over the air from MicroPython:
             # the old value is written back, and the app sees it on its next read.
