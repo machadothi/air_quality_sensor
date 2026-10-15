@@ -91,6 +91,7 @@ def load_config():
         },
         "bluetooth": {                              # ESP32 only, see ble.py
             "enabled": True,
+            "passkey": "",                          # fixed 6-digit pairing code; "" = a new one on the display each time
             "bthome": True,                         # broadcast readings for Home Assistant
             "name": "",                             # "" = Air-Monitor-<last 4 hex digits of the MAC>
         },
@@ -277,12 +278,13 @@ class App:
         print("Temperature offset:", self.air.offset, "°C")
 
     def factory_reset(self):
-        """Forget settings.json (back to config.json) and restart."""
+        """Forget settings.json (back to config.json) and the paired phones, and restart."""
         import os
-        try:
-            os.remove(SETTINGS_FILE)
-        except OSError:
-            pass
+        for name in (SETTINGS_FILE, "ble_bonds.json"):
+            try:
+                os.remove(name)
+            except OSError:
+                pass
         print("Factory reset")
         self.reboot_at = time.ticks_add(time.ticks_ms(), 500)
 

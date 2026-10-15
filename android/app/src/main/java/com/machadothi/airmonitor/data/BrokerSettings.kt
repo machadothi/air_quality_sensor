@@ -15,7 +15,8 @@ import javax.inject.Singleton
 /**
  * Where the broker is and which board to talk to. Typed in once on the
  * Connect screen and kept only on the phone (app-private storage, excluded
- * from backups: allowBackup="false"); nothing is built into the app.
+ * from backups and device transfers); the password encrypted with a Keystore
+ * key (SecretBox). Nothing is built into the app.
  */
 data class BrokerSettings(
     val host: String = "",
@@ -37,18 +38,27 @@ class SettingsStore @Inject constructor(@ApplicationContext private val context:
         val host = stringPreferencesKey("host")
         val port = intPreferencesKey("port")
         val username = stringPreferencesKey("username")
-        val password = stringPreferencesKey("password")
+        val legacyPassword = stringPreferencesKey("password")   // plain text, before SecretBox
+        val sealedPassword = stringPreferencesKey("password_sealed")
         val clientId = stringPreferencesKey("client_id")
         val stateTopic = stringPreferencesKey("state_topic")
     }
 
     suspend fun load(): BrokerSettings {
         val p = context.store.data.first()
+        val legacy = p[Keys.legacyPassword]
+        val password = legacy ?: SecretBox.decrypt(p[Keys.sealedPassword] ?: "") ?: ""
+        if (legacy != null) {   // move an old plain-text password into the Keystore-sealed one
+            context.store.edit {
+                it[Keys.sealedPassword] = SecretBox.encrypt(legacy)
+                it.remove(Keys.legacyPassword)
+            }
+        }
         return BrokerSettings(
             host = p[Keys.host] ?: "",
             port = p[Keys.port] ?: 1883,
             username = p[Keys.username] ?: "",
-            password = p[Keys.password] ?: "",
+            password = password,
             clientId = p[Keys.clientId] ?: "",
             stateTopic = p[Keys.stateTopic] ?: AirProtocol.DEFAULT_STATE_TOPIC,
         )
@@ -59,7 +69,8 @@ class SettingsStore @Inject constructor(@ApplicationContext private val context:
             it[Keys.host] = settings.host.trim()
             it[Keys.port] = settings.port
             it[Keys.username] = settings.username
-            it[Keys.password] = settings.password
+            it[Keys.sealedPassword] = SecretBox.encrypt(settings.password)
+            it.remove(Keys.legacyPassword)
             it[Keys.clientId] = settings.clientId.trim()
             it[Keys.stateTopic] = settings.stateTopic.trim()
         }

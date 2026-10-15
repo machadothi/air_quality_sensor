@@ -11,6 +11,18 @@
 #                  humidity, dew point, CO2, TVOC
 # The scan response carries the name. While a phone is connected, only the
 # BTHome packet goes out (not connectable), so Home Assistant keeps getting data.
+#
+# Security: readings are public (BTHome broadcasts them anyway), but every
+# write (settings, Wi-Fi, commands, updates) and the Wi-Fi details need a
+# paired phone. Pairing is LE Secure Connections with a 6-digit passkey that
+# the board shows on its display (or a fixed one from config.json, for a board
+# without display) and the user types on the phone: someone nearby can't pair
+# without seeing the display. Paired phones are kept in ble_bonds.json; a
+# factory reset forgets them. Without display and fixed passkey the link is
+# still encrypted, but anyone in range can pair ("Just Works"): docs/bluetooth.md.
+import binascii
+import json
+import os
 import struct
 import sys
 import time
@@ -23,10 +35,26 @@ import sensors
 _IRQ_CENTRAL_CONNECT = const(1)
 _IRQ_CENTRAL_DISCONNECT = const(2)
 _IRQ_GATTS_WRITE = const(3)
+_IRQ_ENCRYPTION_UPDATE = const(28)
+_IRQ_GET_SECRET = const(29)
+_IRQ_SET_SECRET = const(30)
+_IRQ_PASSKEY_ACTION = const(31)
+_PASSKEY_ACTION_DISPLAY = const(3)
+_IO_DISPLAY_ONLY = const(0)
+_IO_NO_INPUT_OUTPUT = const(3)
 
 _FLAG_READ = const(0x0002)
 _FLAG_WRITE = const(0x0008)
 _FLAG_NOTIFY = const(0x0010)
+_FLAG_READ_ENCRYPTED = const(0x0200)
+_FLAG_READ_AUTHENTICATED = const(0x0400)
+_FLAG_WRITE_ENCRYPTED = const(0x1000)
+_FLAG_WRITE_AUTHENTICATED = const(0x2000)
+
+_BONDS_FILE = "ble_bonds.json"
+_BONDS_MAX = const(48)        # stored keys (a few per phone)
+_PENDING_MAX = const(8)       # queued writes; more are dropped
+_PAIRING_SHOW_MS = const(60000)
 
 PROTOCOL_VERSION = const(1)
 BOARD_ID = const(0x0C)            # "ESP32 Air" (Thunderboards are 0x0A/0x0B)
@@ -65,20 +93,28 @@ def _uuid(short):
 
 
 _SERVICE_UUID = _uuid(0x00)
-_ENV = (_uuid(0x01), _FLAG_READ | _FLAG_NOTIFY)
-_INFO = (_uuid(0x06), _FLAG_READ)
-_COMMAND = (_uuid(0x07), _FLAG_WRITE)
-_NAME = (_uuid(0x08), _FLAG_READ | _FLAG_WRITE)
-_DISPLAY = (_uuid(0x09), _FLAG_READ | _FLAG_WRITE)
-_AIR = (_uuid(0x0A), _FLAG_READ | _FLAG_NOTIFY)
-_SYSTEM = (_uuid(0x0B), _FLAG_READ | _FLAG_NOTIFY)
-_CALIBRATION = (_uuid(0x0C), _FLAG_READ | _FLAG_WRITE | _FLAG_NOTIFY)
-_TIME = (_uuid(0x0D), _FLAG_READ | _FLAG_WRITE)
-_WIFI = (_uuid(0x0E), _FLAG_READ | _FLAG_WRITE | _FLAG_NOTIFY)
-_WEATHER = (_uuid(0x0F), _FLAG_READ | _FLAG_WRITE)
-_UPDATE = (_uuid(0x10), _FLAG_READ | _FLAG_WRITE | _FLAG_NOTIFY)
-_SERVICE = (_SERVICE_UUID, (_ENV, _INFO, _COMMAND, _NAME, _DISPLAY, _AIR, _SYSTEM, _CALIBRATION, _TIME, _WIFI,
-                            _WEATHER, _UPDATE))
+
+
+def _service(authenticated):
+    """The GATT service. Writes, and reading the Wi-Fi details, need a paired
+    link: authenticated (passkey) when the board can show or has a passkey,
+    else at least encrypted."""
+    w = _FLAG_WRITE | (_FLAG_WRITE_AUTHENTICATED if authenticated else _FLAG_WRITE_ENCRYPTED)
+    secret_read = _FLAG_READ | (_FLAG_READ_AUTHENTICATED if authenticated else _FLAG_READ_ENCRYPTED)
+    return (_SERVICE_UUID, (
+        (_uuid(0x01), _FLAG_READ | _FLAG_NOTIFY),             # Env
+        (_uuid(0x06), _FLAG_READ),                            # Info
+        (_uuid(0x07), w),                                     # Command
+        (_uuid(0x08), _FLAG_READ | w),                        # Name
+        (_uuid(0x09), _FLAG_READ | w),                        # Display
+        (_uuid(0x0A), _FLAG_READ | _FLAG_NOTIFY),             # Air
+        (_uuid(0x0B), _FLAG_READ | _FLAG_NOTIFY),             # System
+        (_uuid(0x0C), _FLAG_READ | w | _FLAG_NOTIFY),         # Calibration
+        (_uuid(0x0D), _FLAG_READ | w),                        # Time
+        (_uuid(0x0E), secret_read | w | _FLAG_NOTIFY),        # Wi-Fi
+        (_uuid(0x0F), _FLAG_READ | w),                        # Weather
+        (_uuid(0x10), _FLAG_READ | w | _FLAG_NOTIFY),         # Update
+    ))
 
 _UNIX_2000 = const(946684800)
 
@@ -97,9 +133,20 @@ class Ble:
         self.name = cfg["name"] or "Air-Monitor-%02X%02X" % (mac[4], mac[5])
         self.bthome = cfg["bthome"]
         self.ble.config(gap_name=self.name)
+        # Pairing: a passkey the user can see (display or fixed) protects against
+        # someone nearby; without one, Just Works (encrypted, not authenticated).
+        fixed = str(cfg.get("passkey") or "")
+        self.fixed_passkey = int(fixed) if len(fixed) == 6 and fixed.isdigit() else None
+        authenticated = app.display is not None or self.fixed_passkey is not None
+        self.ble.config(bond=True, le_secure=True, mitm=authenticated,
+                        io=_IO_DISPLAY_ONLY if authenticated else _IO_NO_INPUT_OUTPUT)
+        self.pairing_code = None   # shown on the display while a phone pairs
+        self._pairing_until = None
+        self._bonds = self._load_bonds()
+        self._bonds_dirty = False
         ((self.h_env, self.h_info, self.h_command, self.h_name, self.h_display, self.h_air, self.h_system,
           self.h_calibration, self.h_time, self.h_wifi, self.h_weather, self.h_update),) = \
-            self.ble.gatts_register_services((_SERVICE,))
+            self.ble.gatts_register_services((_service(authenticated),))
         self.ble.gatts_set_buffer(self.h_name, NAME_MAX)
         self.ble.gatts_set_buffer(self.h_display, 6)
         self.ble.gatts_set_buffer(self.h_calibration, 20)
@@ -127,12 +174,67 @@ class Ble:
         self.write_time()
         self.write_wifi(notify=False)
         self._update_values(notify=False)
-        print("Bluetooth: advertising as", self.name)
+        print("Bluetooth: advertising as", self.name, "(pairing with passkey)" if authenticated else
+              "(pairing without passkey: no display, no bluetooth.passkey)")
+
+    # --- pairing ---------------------------------------------------------------
+
+    def _load_bonds(self):
+        try:
+            with open(_BONDS_FILE) as f:
+                return {tuple(k.split(":")): v for k, v in json.load(f).items()}
+        except (OSError, ValueError):
+            return {}
+
+    def _save_bonds(self):
+        with open(_BONDS_FILE, "w") as f:
+            json.dump({"%s:%s" % k: v for k, v in self._bonds.items()}, f)
+        self._bonds_dirty = False
+
+    def _set_secret(self, sec_type, key, value):
+        key = (str(sec_type), binascii.hexlify(bytes(key)).decode())
+        if value is None:
+            if self._bonds.pop(key, None) is None:
+                return False
+        else:
+            if key not in self._bonds and len(self._bonds) >= _BONDS_MAX:
+                return False
+            self._bonds[key] = binascii.hexlify(bytes(value)).decode()
+        self._bonds_dirty = True   # written to flash in poll(), not in the callback
+        return True
+
+    def _get_secret(self, sec_type, index, key):
+        if key is None:   # the index-th secret of this type
+            i = 0
+            for (t, _), value in self._bonds.items():
+                if t == str(sec_type):
+                    if i == index:
+                        return binascii.unhexlify(value)
+                    i += 1
+            return None
+        value = self._bonds.get((str(sec_type), binascii.hexlify(bytes(key)).decode()))
+        return binascii.unhexlify(value) if value else None
+
+    def _new_passkey(self):
+        if self.fixed_passkey is not None:
+            return self.fixed_passkey
+        return int.from_bytes(os.urandom(4), "big") % 1000000
 
     # --- main loop -------------------------------------------------------------
 
     def poll(self):
         now = time.ticks_ms()
+        if self._bonds_dirty:
+            self._save_bonds()
+        display = self.app.display
+        if display:   # the pairing code, while a phone pairs
+            if self.pairing_code is not None and time.ticks_diff(time.ticks_ms(), self._pairing_until) >= 0:
+                self.pairing_code = None
+            notice = None if self.pairing_code is None else (
+                "%03d %03d" % (self.pairing_code // 1000, self.pairing_code % 1000), "Pairing code: type it on the phone")
+            if notice != display.notice:
+                display.notice = notice
+                display.refresh(self.app.air, self.app.net, self.app.history)
         while self.pending:
             try:   # a bad write from a phone must not stop the board
                 self._handle_write(*self.pending.pop(0))
@@ -365,11 +467,29 @@ class Ble:
             print("Bluetooth: phone connected")
         elif event == _IRQ_CENTRAL_DISCONNECT:
             self.connection = None
+            self.pairing_code = None
             self._next_adv = time.ticks_ms()
             print("Bluetooth: phone disconnected")
         elif event == _IRQ_GATTS_WRITE:
             handle = data[1]
-            self.pending.append((handle, bytes(self.ble.gatts_read(handle))))
+            if len(self.pending) < _PENDING_MAX:
+                self.pending.append((handle, bytes(self.ble.gatts_read(handle))))
+        elif event == _IRQ_PASSKEY_ACTION:
+            conn, action, _ = data
+            if action == _PASSKEY_ACTION_DISPLAY:
+                self.pairing_code = self._new_passkey()
+                self._pairing_until = time.ticks_add(time.ticks_ms(), _PAIRING_SHOW_MS)
+                self.ble.gap_passkey(conn, action, self.pairing_code)
+                print("Bluetooth: pairing, code on the display")
+        elif event == _IRQ_ENCRYPTION_UPDATE:
+            _, encrypted, authenticated, bonded, _ = data
+            self.pairing_code = None
+            print("Bluetooth: link", "encrypted" if encrypted else "not encrypted",
+                  "(authenticated)" if authenticated else "", "(paired)" if bonded else "")
+        elif event == _IRQ_GET_SECRET:
+            return self._get_secret(*data)
+        elif event == _IRQ_SET_SECRET:
+            return self._set_secret(*data)
 
     def _handle_write(self, handle, value):
         app = self.app
@@ -430,7 +550,8 @@ class Ble:
                 n = value[1]
                 ssid = value[2:2 + n].decode()
                 password = value[3 + n:3 + n + value[2 + n]].decode() if len(value) > 2 + n else ""
-                app.set_wifi(ssid, password)
+                if 0 < len(ssid) <= 32 and len(password) <= 64:   # Wi-Fi limits
+                    app.set_wifi(ssid, password)
             elif value[0] == 3:
                 app.forget_wifi()
             elif value[0] in (4, 5):

@@ -231,3 +231,7 @@ android/local.properties
 *.iml
 .kotlin/
 dist/
+
+# Signing keys never belong in the repository (tools/signing_key.py)
+*.pem
+*.key

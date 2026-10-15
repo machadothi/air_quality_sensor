@@ -8,6 +8,11 @@
 #
 #   /update_check    fetch https://github.com/<repo>/releases/latest/download/manifest.json
 #                    {"version", "notes", "mpy": 6, "files": [{"name", "size", "sha256"}]}
+#                    and manifest.sig, its signature: only a manifest signed with
+#                    the release key (release_key.py, signature.py) is believed.
+#                    Its files are then checked by size and SHA-256, so nothing
+#                    depends on the connection being secure (MicroPython's TLS
+#                    doesn't verify certificates).
 #   /update_install  download every file into /update/ (SHA-256 checked), write
 #                    /update_pending and restart: boot.py moves the old files to
 #                    /previous/ and the new ones into place, and rolls back if the
@@ -26,10 +31,12 @@ import time
 
 from micropython import const
 
+import release_key
+import signature
 from version import VERSION
 
 REPO = "machadothi/air_quality_sensor"
-_MANIFEST_URL = "https://github.com/%s/releases/latest/download/manifest.json" % REPO
+_LATEST_URL = "https://github.com/%s/releases/latest/download/" % REPO
 _FILE_URL = "https://github.com/%s/releases/download/v%s/%s"
 UPDATE_DIR = "/update"
 PENDING = "/update_pending"
@@ -49,6 +56,13 @@ UP_TO_DATE = const(6)
 STATES = ("idle", "checking", "available", "downloading", "restarting", "failed", "up to date")
 
 _CHECK_HOUR = const(3)   # nightly check at 03:30 local time
+_MANIFEST_MAX = const(16384)
+_SIGNATURE_MAX = const(1024)
+_FILES_MAX = const(40)
+_FILE_MAX = const(256 * 1024)
+_HEADERS_MAX = const(60)
+_PROTECTED = ("config.json", "settings.json", "boot.py.bak")   # never replaced by an update
+_NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_."
 
 
 def _exists(path):
@@ -117,7 +131,7 @@ def _open(url):
                 % (path.encode(), host.encode()))
         status = int(s.readline().split(None, 2)[1])
         hdrs = {}
-        while True:
+        for _ in range(_HEADERS_MAX):
             line = s.readline()
             if not line or line == b"\r\n":
                 break
@@ -157,23 +171,67 @@ def _body(s, hdrs, sink):
             left -= len(chunk)
 
 
-def _get_json(url):
+def _get(url, limit):
+    """The whole body, at most limit bytes."""
     s, hdrs = _open(url)
     data = bytearray()
+
+    def sink(chunk):
+        if len(data) + len(chunk) > limit:
+            raise OSError("reply too large")
+        data.extend(chunk)
     try:
-        _body(s, hdrs, data.extend)
+        _body(s, hdrs, sink)
     finally:
         s.close()
-    return json.loads(bytes(data))
+    return bytes(data)
 
 
-def _download(url, path, sha256):
-    """One file to flash, its SHA-256 checked."""
+def _valid_name(name):
+    return (isinstance(name, str) and 0 < len(name) <= 32 and name[0] != "."
+            and all(c in _NAME_CHARS for c in name) and name not in _PROTECTED
+            and (name.endswith(".mpy") or name.endswith(".py") or name.endswith(".bin")))
+
+
+def check_manifest(data, sig):
+    """The manifest from its bytes, if the signature is right and every entry
+    makes sense; else OSError with the reason."""
+    if not signature.verify(data, sig, release_key.N, release_key.E, release_key.BYTES):
+        raise OSError("signature invalid: not an official release")
+    manifest = json.loads(data)
+    version, files = manifest.get("version"), manifest.get("files")
+    if not isinstance(version, str) or _version_tuple(version) == (0,):
+        raise OSError("bad version")
+    if not isinstance(files, list) or not 0 < len(files) <= _FILES_MAX:
+        raise OSError("bad file list")
+    for f in files:
+        if not (isinstance(f, dict) and _valid_name(f.get("name")) and isinstance(f.get("size"), int)
+                and 0 < f["size"] <= _FILE_MAX and isinstance(f.get("sha256"), str) and len(f["sha256"]) == 64):
+            raise OSError("bad file entry")
+    if not isinstance(manifest.get("notes"), str):
+        manifest["notes"] = ""
+    manifest["notes"] = manifest["notes"][:1000]
+    return manifest
+
+
+def _fetch_manifest(source):
+    base = source or _LATEST_URL
+    data = _get(base + "manifest.json", _MANIFEST_MAX)
+    sig = _get(base + "manifest.sig", _SIGNATURE_MAX)
+    return check_manifest(data, sig)
+
+
+def _download(url, path, size, sha256):
+    """One file to flash: exactly size bytes, its SHA-256 checked."""
     import binascii
     import hashlib
     digest = hashlib.sha256()
+    got = [0]
     with open(path, "wb") as out:
         def sink(chunk):
+            got[0] += len(chunk)
+            if got[0] > size:
+                raise OSError("file larger than announced")
             digest.update(chunk)
             out.write(chunk)
         s, hdrs = _open(url)
@@ -181,8 +239,13 @@ def _download(url, path, sha256):
             _body(s, hdrs, sink)
         finally:
             s.close()
-    if binascii.hexlify(digest.digest()).decode() != sha256:
+    if got[0] != size or binascii.hexlify(digest.digest()).decode() != sha256:
         raise OSError("checksum mismatch")
+
+
+def _free_bytes():
+    st = os.statvfs("/")
+    return st[0] * st[4]
 
 
 # --- maintenance start (main.py, before the app) ---------------------------------------
@@ -225,7 +288,7 @@ def maintenance():
     gc.collect()
     try:
         _connect_wifi()
-        manifest = _get_json(source + "manifest.json" if source else _MANIFEST_URL)
+        manifest = _fetch_manifest(source)
     except Exception as e:
         print("Update: check failed:", e)
         _write_status(FAILED, error="check failed: %s" % e)
@@ -245,15 +308,20 @@ def maintenance():
 def _install(manifest, source):
     import machine
     _rmtree(UPDATE_DIR)
-    os.mkdir(UPDATE_DIR)
     files = manifest["files"]
+    need = sum(f["size"] for f in files) + 32768   # and room for settings files
+    if _free_bytes() < need:
+        _write_status(FAILED, manifest, "not enough flash for the update")
+        print("Update: not enough flash (%d bytes needed)" % need)
+        return
+    os.mkdir(UPDATE_DIR)
     try:
         for i, f in enumerate(files):
             url = source + f["name"] if source else _FILE_URL % (REPO, manifest["version"], f["name"])
             for attempt in range(3):
                 try:
                     gc.collect()
-                    _download(url, UPDATE_DIR + "/" + f["name"], f["sha256"])
+                    _download(url, UPDATE_DIR + "/" + f["name"], f["size"], f["sha256"])
                     break
                 except OSError as e:
                     print("Update: %s attempt %d failed: %s" % (f["name"], attempt + 1, e))
