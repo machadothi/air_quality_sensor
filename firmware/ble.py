@@ -12,6 +12,7 @@
 # The scan response carries the name. While a phone is connected, only the
 # BTHome packet goes out (not connectable), so Home Assistant keeps getting data.
 import struct
+import sys
 import time
 
 import bluetooth
@@ -133,7 +134,10 @@ class Ble:
     def poll(self):
         now = time.ticks_ms()
         while self.pending:
-            self._handle_write(*self.pending.pop(0))
+            try:   # a bad write from a phone must not stop the board
+                self._handle_write(*self.pending.pop(0))
+            except Exception as e:
+                sys.print_exception(e)
         if time.ticks_diff(now, self._next_update) >= 0:
             self._next_update = time.ticks_add(now, _UPDATE_MS)
             self._update_values(notify=self.connection is not None)

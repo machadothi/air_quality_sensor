@@ -51,10 +51,19 @@ _display = None          # for the error screen in run()
 
 
 def load_config():
-    """config.json, completed with defaults, then settings.json on top."""
+    """config.json, completed with defaults, then settings.json on top.
+    Everything has a default: without config.json (or without its wifi/mqtt
+    parts) the board runs offline, and the network can be chosen in the app."""
     defaults = {
+        "wifi": {"ssid": "", "password": ""},       # "" = no network: offline until set in the app
         "mqtt": {
             "enabled": True,                        # False: no MQTT at all (switch in the app)
+            "server": "",                           # "" = no broker: MQTT stays off
+            "client_id": "air-monitor",
+            "username": "",
+            "password": "",
+            "topic_sub": "esp/{client_id}/request",
+            "topic_pub": "esp/{client_id}/response",
             "port": 0,                              # 0 = 1883
             "topic_state": "esp/air_quality_sensor",
             "publish_s": 60,                        # readings are averaged over this time
@@ -94,8 +103,12 @@ def load_config():
             "pages": list(PAGE_NAMES),
         },
     }
-    with open(CONFIG_FILE) as f:
-        cfg = json.load(f)
+    try:
+        with open(CONFIG_FILE) as f:
+            cfg = json.load(f)
+    except (OSError, ValueError) as e:   # missing or broken: run on defaults
+        print("config.json not usable (%s): running without network settings" % e)
+        cfg = {}
     # "esp" in older config files is ignored: the board is detected (PLATFORM).
     pins = DEFAULT_PINS[PLATFORM].copy()
     pins.update(cfg.get("pins", {}).get(PLATFORM, {}))
@@ -362,14 +375,14 @@ class App:
         """Start screen while Wi-Fi connects; stop waiting after a few seconds."""
         display, net = self.display, self.net
         start = time.ticks_ms()
-        while not net.wifi_ok and time.ticks_diff(time.ticks_ms(), start) < _BOOT_WIFI_WAIT_MS:
+        while net.ssid and not net.wifi_ok and time.ticks_diff(time.ticks_ms(), start) < _BOOT_WIFI_WAIT_MS:
             if display:
                 display.splash("Connecting to Wi-Fi",
                                0.2 + 0.6 * time.ticks_diff(time.ticks_ms(), start) / _BOOT_WIFI_WAIT_MS)
             self.air.update()
             time.sleep_ms(200)
         if display:
-            display.splash("Connecting to MQTT" if net.wifi_ok else "No Wi-Fi yet", 0.9)
+            display.splash("Connecting to MQTT" if net.wifi_ok else "No Wi-Fi yet" if net.ssid else "No Wi-Fi set", 0.9)
         net.poll()
 
     def _watchdog(self, _):
