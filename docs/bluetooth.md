@@ -249,7 +249,9 @@ How it's done in `firmware/ble.py`:
   with the `_ENCRYPTED` variants in Just Works mode. NimBLE refuses an
   unpaired write with "insufficient authentication", and the phone then pairs.
 - **The code:** `_IRQ_PASSKEY_ACTION` makes a random code with `os.urandom`
-  and gives it to NimBLE.
+  and gives it to NimBLE. It's also printed on the USB log
+  (`Bluetooth: pairing code …`), where the hardware tests read it; USB access
+  is full access anyway.
 - **Paired phones:** the bond keys come and go through `_IRQ_SET_SECRET` and
   `_IRQ_GET_SECRET`, and are saved outside the callback.
 
