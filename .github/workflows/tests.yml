@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pytest pyflakes "mpy-cross==1.24.1.post3"
+      - run: pip install pytest pyflakes pyserial "mpy-cross==1.24.1.post3"   # tests/hardware skip without a board
       - name: Lint
         run: python -m pyflakes firmware tools tests
       - name: Compile for MicroPython 1.24

@@ -13,9 +13,18 @@ FIRMWARE_MODULES = ("app", "net", "sensors", "ui", "ui_more", "gfx", "assets", "
                     "selfcal", "clock", "weather", "updater", "version", "signature", "release_key")
 
 
+def pytest_addoption(parser):
+    parser.addoption("--board", metavar="PORT", default=None,
+                     help="run tests/hardware/ against the real test board on this serial port")
+
+
 @pytest.fixture
 def board(tmp_path, monkeypatch):
     """The fake board; the current directory is its flash."""
+    import time
+    real_time = {name: getattr(time, name) for name in ("time", "gmtime", "localtime", "mktime")}
+    for name, f in real_time.items():   # the fakes replace these: put the real ones back afterwards
+        monkeypatch.setattr(time, name, f)
     b = fakes.install()
     b.__init__()
     monkeypatch.chdir(tmp_path)

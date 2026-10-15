@@ -71,6 +71,7 @@ For a board without MicroPython, the Android SDK, or full details, see
 | [docs/sensors.md](docs/sensors.md) | how the ENS160 and AHT21 are driven: registers, compensation, warm-up |
 | [docs/display.md](docs/display.md) | the UI, and **how to make a UI like it in Python**: fonts, icons, charts, animation, preview |
 | [docs/updates.md](docs/updates.md) | over-the-air updates, signed releases, and how to make a release |
+| [docs/testing.md](docs/testing.md) | the PC tests with MicroPython fakes, and the hardware tests on a real board |
 | [SECURITY.md](SECURITY.md) | what is protected and how, the known limits, reporting a problem |
 | [docs/android-app.md](docs/android-app.md) | the phone app: screens, build, first start, how it talks to the board |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | when something doesn't work |
@@ -124,6 +125,15 @@ Bluetooth, MQTT, and a clock the tests control. The tests cover:
 
 GitHub Actions runs them, a lint and an `mpy-cross` compile on every push and
 pull request (`.github/workflows/tests.yml`).
+
+**On the real board** (`tests/hardware/`, about 10 minutes):
+
+```sh
+.venv/bin/pytest tests/hardware --board /dev/ttyUSB0
+```
+
+See [docs/testing.md](docs/testing.md) for what each suite covers and what
+the hardware tests need.
 
 ## Secrets
 
