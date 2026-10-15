@@ -24,6 +24,7 @@ _LOCATE = "http://ip-api.com/json/?fields=status,message,city,country,lat,lon"  
 _EVERY_MS = const(30 * 60 * 1000)
 _RETRY_MS = const(5 * 60 * 1000)
 _STALE_MS = const(3 * 3600 * 1000)
+_PLACE_MAX = const(40)
 
 # WMO weather codes (Open-Meteo docs) -> (short text, icon)
 _KINDS = (
@@ -44,6 +45,14 @@ def describe(code):
         if code in codes:
             return text, icon
     return "--", "cloud"
+
+
+def _number(value, low, high):
+    """value as a float within low..high, else ValueError."""
+    value = float(value)
+    if not low <= value <= high:
+        raise ValueError("value out of range: %s" % value)
+    return value
 
 
 def _quote(text):
@@ -74,7 +83,7 @@ class Weather:
     def set_place(self, name):
         """Look the place up (on the next poll, which may block ~1 s).
         "" or "auto": find it from the board's internet address."""
-        self._place_request = name.strip() or "auto"
+        self._place_request = name.strip()[:_PLACE_MAX] or "auto"
 
     def refresh(self):
         self._next = time.ticks_ms()
@@ -82,8 +91,12 @@ class Weather:
     def poll(self):
         if not self.cfg["enabled"] or not self.app.net.wifi_ok:
             return
-        if self._place_request is None and self.cfg["latitude"] is None:
-            self._place_request = "auto"   # no place yet: find one
+        if (self._place_request is None and self.cfg["latitude"] is None
+                and time.ticks_diff(time.ticks_ms(), self._next) >= 0):
+            # No place yet: find one, at most every _RETRY_MS (each try can block
+            # for seconds when Wi-Fi is up but the internet isn't).
+            self._place_request = "auto"
+            self._next = time.ticks_add(time.ticks_ms(), _RETRY_MS)
         if self._place_request:
             name, self._place_request = self._place_request, None
             if name.lower() == "auto":
@@ -119,7 +132,20 @@ class Weather:
             self.error = "location unknown: %s" % found.get("message")
             print("Weather:", self.error)
             return
-        self._use_place(found["city"], found["lat"], found["lon"], found.get("country", ""), auto=True)
+        self._place_from(found, "city", "lat", "lon", auto=True)
+
+    def _place_from(self, found, name_key, lat_key, lon_key, auto):
+        """Weather data comes over plain HTTP: check it before keeping it."""
+        try:
+            name = str(found[name_key])[:_PLACE_MAX]
+            latitude, longitude = float(found[lat_key]), float(found[lon_key])
+            if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+                raise ValueError("out of range")
+        except (KeyError, TypeError, ValueError) as e:
+            self.error = "bad place data: %s" % e
+            print("Weather:", self.error)
+            return
+        self._use_place(name, latitude, longitude, str(found.get("country", ""))[:_PLACE_MAX], auto)
 
     def _use_place(self, name, latitude, longitude, country, auto):
         cfg = self.cfg
@@ -142,23 +168,27 @@ class Weather:
             self.error = "place not found: %s" % name
             print("Weather:", self.error)
             return
-        place = found[0]
-        self._use_place(place["name"], place["latitude"], place["longitude"], place.get("country", ""), auto=False)
+        if not isinstance(found, list) or not isinstance(found[0], dict):
+            self.error = "bad place data"
+            return
+        self._place_from(found[0], "name", "latitude", "longitude", auto=False)
 
     def _fetch(self):
         try:
             data = self._get(_FORECAST % (self.cfg["latitude"], self.cfg["longitude"]))
             current, daily = data["current"], data["daily"]
+            # Plain HTTP: every value is checked, so a spoofed reply can't crash
+            # the display or Bluetooth code that formats them.
             self.now = {
-                "temperature": current["temperature_2m"],
-                "feels_like": current["apparent_temperature"],
-                "humidity": current["relative_humidity_2m"],
-                "code": current["weather_code"],
-                "wind": current["wind_speed_10m"],
+                "temperature": _number(current["temperature_2m"], -90, 60),
+                "feels_like": _number(current["apparent_temperature"], -100, 70),
+                "humidity": int(_number(current["relative_humidity_2m"], 0, 100)),
+                "code": int(_number(current["weather_code"], 0, 99)),
+                "wind": _number(current["wind_speed_10m"], 0, 120),
                 "day": bool(current["is_day"]),
-                "high": daily["temperature_2m_max"][0],
-                "low": daily["temperature_2m_min"][0],
-                "rain_chance": daily["precipitation_probability_max"][0],
+                "high": _number(daily["temperature_2m_max"][0], -90, 60),
+                "low": _number(daily["temperature_2m_min"][0], -90, 60),
+                "rain_chance": int(_number(daily["precipitation_probability_max"][0] or 0, 0, 100)),
             }
             self.fetched = time.ticks_ms()
             self._next = time.ticks_add(self.fetched, _EVERY_MS)
