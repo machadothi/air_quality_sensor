@@ -191,8 +191,12 @@ def _download(url, path, sha256):
 def _connect_wifi():
     """The network from config.json, or the one chosen in the app (settings.json)."""
     import network
-    with open("config.json") as f:
-        wifi = json.load(f)["wifi"]
+    wifi = {"ssid": "", "password": ""}
+    try:
+        with open("config.json") as f:
+            wifi.update(json.load(f).get("wifi") or {})
+    except (OSError, ValueError):
+        pass
     try:
         with open("settings.json") as f:
             wifi.update(json.load(f).get("wifi") or {})
@@ -306,8 +310,12 @@ class Updater:
         self._restart_at = time.ticks_add(time.ticks_ms(), 1500)   # let the app hear it first
 
     def check(self):
-        if self._restart_at is None:
-            self._restart_for(CHECK_FLAG, CHECKING)
+        if self._restart_at is not None:
+            return
+        if not self.app.net.wifi_ok:   # nothing to gain from a restart
+            self.state, self.error = FAILED, "no internet: connect the board to Wi-Fi first"
+            return
+        self._restart_for(CHECK_FLAG, CHECKING)
 
     def install(self):
         if self.available and self._restart_at is None:
