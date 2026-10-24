@@ -20,7 +20,7 @@ import pytest
 
 import board as hw
 
-COMMAND, IDENTIFY, FACTORY_RESET, OPEN_PAIRING = 0x07, b"\x04", b"\x02", b"\x05"
+COMMAND, IDENTIFY, FACTORY_RESET, OPEN_PAIRING = 0x07, b"\x04", b"\x02", b"\x06"
 ENV, AIR = 0x01, 0x0A
 
 

@@ -46,7 +46,7 @@ and their layouts match the Thunderboard firmware's `ble_protocol.h`.
 |---|---|---|---|---|
 | 01 | Env | read, notify (every 2 s) | 27 | Thunderboard layout; only temperature and humidity are filled in (`valid` bits 0 and 1) |
 | 06 | Info | read | 4 | protocol version `1`, board id `0x0C`, sensors `0x41` (bit 0 temperature/humidity, bit 6 air quality), reserved |
-| 07 | Command | write | 1 | `0x02` factory reset, `0x03` reboot, `0x04` identify (the display flashes for 3 s), `0x05` open the pairing window for 2 minutes (add another phone) |
+| 07 | Command | write | 1 | `0x02` factory reset, `0x03` reboot, `0x04` identify (the display flashes for 3 s), `0x06` open the pairing window for 2 minutes (add another phone; `0x05` is the Thunderboard's reset orientation) |
 | 08 | Name | read, write | ≤ 20 | UTF-8; stored, advertised from the next advertising round |
 | 09 | Display | read, write | 7 | `present` (u8), `page_mask` (u16), `page_ms` (u16, 1000–60000), `flags` (u8, bit 0 = rotated 180°), page bits 16–23 (u8). A 5-byte write (Thunderboard clients) leaves the rest as it is. |
 | 0A | **Air** | read, notify (every 2 s) | 22 | see below |
@@ -230,7 +230,7 @@ In `config.json` (all optional):
   - **Press the reset button twice,** within a few seconds: open for **2
     minutes**. `boot.py` counts power-on starts; a software restart, a crash
     or the watchdog doesn't count, so only a finger on the button opens it.
-  - **From a bonded phone:** Command `0x05` ("add a phone") opens it for 2
+  - **From a bonded phone:** Command `0x06` ("add a phone") opens it for 2
     minutes.
   - **First setup:** while no phone is bonded yet, it's open for 10 minutes
     after each start.

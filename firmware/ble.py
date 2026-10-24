@@ -77,7 +77,7 @@ _ENV_VALID_HUMIDITY = const(1 << 1)
 COMMAND_FACTORY_RESET = const(0x02)
 COMMAND_REBOOT = const(0x03)
 COMMAND_IDENTIFY = const(0x04)
-COMMAND_OPEN_PAIRING = const(0x05)   # from a bonded phone: let another phone pair
+COMMAND_OPEN_PAIRING = const(0x06)   # from a bonded phone: let another phone pair (0x05 is the Thunderboard's reset orientation)
 
 NAME_MAX = const(20)
 PAGE_MS_MIN = const(1000)
