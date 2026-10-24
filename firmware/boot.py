@@ -1,4 +1,5 @@
-# Runs first at every boot. Besides tidying memory it finishes an over-the-air
+# Runs first at every boot. Besides tidying memory it counts reset-button
+# presses (for Bluetooth pairing, see ble.py) and finishes an over-the-air
 # update (see updater.py): it puts the downloaded files in place, and rolls them
 # back if the new version doesn't run healthily within two starts (app.py
 # deletes /update_trial after 60 s of normal running). Everything is wrapped so
@@ -55,6 +56,29 @@ def _trial():
         with open("/update_trial", "w") as f:
             f.write("%d %s" % (starts + 1, version))
 
+
+def _count_presses():
+    """Counts reset-button presses in a row, for opening the Bluetooth pairing
+    window (ble.py): every power-on start (the reset button, or power) adds one,
+    any other start (software restart, crash, watchdog) starts again from zero.
+    app.py deletes the count once the board has run a few seconds."""
+    import machine
+    if machine.reset_cause() != machine.PWRON_RESET:
+        if _exists("/presses"):
+            os.remove("/presses")
+        return
+    count = 0
+    if _exists("/presses"):
+        with open("/presses") as f:
+            count = int(f.read() or 0)
+    with open("/presses", "w") as f:
+        f.write(str(count + 1))
+
+
+try:
+    _count_presses()
+except Exception as e:
+    print("boot: press count failed:", e)
 
 try:
     if _exists("/update_pending") and _exists("/update/manifest.json"):

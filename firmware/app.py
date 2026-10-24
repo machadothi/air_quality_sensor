@@ -46,6 +46,7 @@ _HISTORY_MS = 60000      # one chart point a minute
 _MEMORY_MS = 10000       # track the lowest free RAM
 _WATCHDOG_MS = 120000    # restart if the loop stalls this long
 _BOOT_WIFI_WAIT_MS = 8000
+_PRESS_WINDOW_S = 5       # reset presses this close together count as a double press
 
 _display = None          # for the error screen in run()
 
@@ -91,7 +92,6 @@ def load_config():
         },
         "bluetooth": {                              # ESP32 only, see ble.py
             "enabled": True,
-            "passkey": "",                          # fixed 6-digit pairing code; "" = a new one on the display each time
             "bthome": True,                         # broadcast readings for Home Assistant
             "name": "",                             # "" = Air-Monitor-<last 4 hex digits of the MAC>
         },
@@ -150,6 +150,16 @@ def make_i2c(cfg):
     if PLATFORM == "esp8266":   # no hardware I2C on the ESP8266
         return machine.SoftI2C(scl=scl, sda=sda, freq=400000)
     return machine.I2C(0, scl=scl, sda=sda, freq=400000)
+
+
+def _forget_presses():
+    """The board ran a while: the next reset-button press counts as the first
+    (boot.py, ble.py's pairing window)."""
+    import os
+    try:
+        os.remove("/presses")
+    except OSError:
+        pass
 
 
 def _confirm_update():
@@ -235,7 +245,7 @@ class App:
                        "bluetooth": {"name": bt["name"]},
                        "sensor": {"temperature_offset": self.air.offset,
                                   "auto_calibration": self.cfg["sensor"]["auto_calibration"],
-                                  "last_result": self.selfcal.result if self.selfcal else None}}, f)
+                                  "last_result": self.selfcal.result if self.selfcal else cfg["sensor"].get("last_result")}}, f)
 
     def set_wifi(self, ssid, password):
         """A network chosen in the app; stored in settings.json."""
@@ -403,6 +413,7 @@ class App:
         next_page = time.ticks_add(now, int(cfg["display"]["page_s"] * 1000))
         # The ESP8266 has virtual timers (-1); the ESP32 has hardware timer 0.
         healthy = False   # 60 s of normal running confirms a fresh update (boot.py)
+        presses_kept = True   # the reset-press count (boot.py), until the board has run a few seconds
         timer = machine.Timer(-1 if PLATFORM == "esp8266" else 0)
         timer.init(period=5000, mode=machine.Timer.PERIODIC, callback=self._watchdog)
         print("Running")
@@ -420,6 +431,9 @@ class App:
                 if not healthy and self.uptime_s() >= 60:
                     healthy = True
                     _confirm_update()
+                if presses_kept and self.uptime_s() >= _PRESS_WINDOW_S:
+                    presses_kept = False
+                    _forget_presses()
                 air.update()
                 net.poll()
                 if self.selfcal:

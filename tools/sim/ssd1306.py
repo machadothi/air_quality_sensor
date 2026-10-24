@@ -13,6 +13,9 @@ class SSD1306_I2C(framebuf.FrameBuffer):
     def contrast(self, value):
         pass
 
+    def invert(self, invert):
+        self.inverted = bool(invert)
+
     def rotate(self, rotate):
         pass
 

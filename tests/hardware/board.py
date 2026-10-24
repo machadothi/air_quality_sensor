@@ -106,9 +106,23 @@ class Board:
         return ast.literal_eval(self.exec("print(repr(%s))" % expression, timeout)[-1])
 
     def reset(self):
-        """Hard restart; returns the log mark from just before it."""
+        """Restart (machine.reset() at the REPL); returns the log mark from just before it."""
+        self.interrupt()
         mark = self.mark()
         self._serial.write(b"\x05import machine; machine.reset()\n\x04")
+        return mark
+
+    def press_reset(self, times=1, gap_s=1.0):
+        """Presses the reset (EN) button: the USB adapter's RTS line drives EN on
+        these boards (DTR, which drives BOOT/GPIO0, stays released)."""
+        mark = self.mark()
+        for i in range(times):
+            self._serial.dtr = False
+            self._serial.rts = True
+            time.sleep(0.1)
+            self._serial.rts = False
+            if i < times - 1:
+                time.sleep(gap_s)
         return mark
 
     def restart_app(self, timeout=60):
@@ -195,22 +209,18 @@ def forget(address):
     subprocess.run(["bluetoothctl", "remove", address], capture_output=True, timeout=20)
 
 
-def pair(address, board, timeout=60):
-    """Pairs this PC with the board, typing the passkey the board shows (read
-    from its log, where it's printed for exactly this)."""
+def pair(address, timeout=60):
+    """Pairs and bonds this PC with the board (Just Works, no code). The
+    board's pairing window must be open."""
     import pexpect
     ctl = pexpect.spawn("bluetoothctl", encoding="utf-8", timeout=timeout)
     try:
-        ctl.sendline("agent KeyboardOnly")
+        ctl.sendline("agent NoInputNoOutput")
         ctl.sendline("default-agent")
         ctl.sendline("scan on")
         ctl.expect(address, timeout=30)
         ctl.sendline("scan off")
-        mark = board.mark()
         ctl.sendline("pair %s" % address)
-        ctl.expect(r"(?i)enter passkey")
-        code = board.wait_for(r"Bluetooth: pairing code (\d{6})", 20, since=mark).group(1)
-        ctl.sendline(code)
         ctl.expect(r"Pairing successful")
     finally:
         ctl.sendline("quit")

@@ -20,9 +20,9 @@ These run the **real firmware**, not copies of it, under CPython.
 
 | Fake | Behaves like |
 |---|---|
-| `machine` | I2C with no chips (sensors "not found"), `reset()` raises `fakes.Reset`, RTC |
+| `machine` | I2C with no chips unless a test adds one (`fakes.FakeAHT21`), `reset()` raises `fakes.Reset`, `deepsleep()` raises `fakes.DeepSleep`, `board.reset_cause`, RTC |
 | `network` | the ESP32 Wi-Fi driver: retries by itself, refuses a second `connect()` and scans while connecting; networks in range are `board.networks` |
-| `bluetooth` | records the registered service and flags, settings, passkeys; `board.ble.phone_writes(handle, value)` plays a phone |
+| `bluetooth` | records the registered service and flags, settings, security requests and disconnects; `board.ble.phone_connects(bond="known")` / `(pair_as=b"key")` and `phone_writes(handle, value)` play a phone |
 | `umqtt.simple` | a broker that's up or down; `MQTTClient.inbox` delivers messages or raises errors |
 | `time` | a clock the tests control: `board.ms`, and the RTC from 2000 like MicroPython |
 | `requests`, `ntptime` | no internet unless a test replaces `requests.get` |
@@ -41,7 +41,8 @@ These run the **real firmware**, not copies of it, under CPython.
 |---|---|
 | `test_offline.py` | starting without or with a broken `config.json`; the network gone for 3 minutes; scanning and choosing a network over Bluetooth; no broker; *Check now* without internet |
 | `test_updates.py` | signed vs. tampered, forged or missing signatures; bad file names, sizes and hashes; downloads larger or different than announced; oversized manifests; a whole maintenance check |
-| `test_ble_security.py` | writes need an authenticated link and readings stay public; Just Works without display; fixed passkey; the pairing code on the display; bonds persisted, bounded and forgotten on factory reset; 300 random writes |
+| `test_ble_security.py` | writes need an encrypted, bonded link and readings stay public; the pairing window (first setup, double reset, single reset, "add a phone", closing, on the display); strangers dropped and refused new bonds outside it; bonded phones stay; bonds persisted, bounded and forgotten on factory reset; 300 random writes |
+| `test_selfcal.py` | the self-heating measurement: the board switches off (deep sleep), the first reading after waking gives the offset; reset during the sleep, a warmer room, cancel |
 | `test_untrusted_input.py` | malformed and oversized MQTT messages; MQTT read errors; spoofed weather and location replies; failed lookups spaced out |
 
 **Writing a test:**
@@ -74,16 +75,20 @@ and files on its flash. They use Bluetooth from this PC through bleak and
 
 **What they do, in order:**
 1. **Start-up:** the board starts with this checkout's firmware
-   (`tools/deploy.sh`), finds the AHT21 and ENS160, pairs with a passkey, and
+   (`tools/deploy.sh`), finds the AHT21 and ENS160, and
    runs 20 s without errors.
 2. **Bluetooth:**
    - readings can be read without pairing;
-   - a write without pairing is refused;
-   - **pairing with the code from the display** works. The board also prints
-     the code on its USB log, and `bluetoothctl` types it in. After pairing,
-     writes work;
-   - the pairing survives a restart;
-   - a factory reset forgets it.
+   - first setup: with no phone bonded, the pairing window opens for 10
+     minutes;
+   - pairing without a code in the window works (`bluetoothctl`), and writes
+     work afterwards;
+   - an unpaired phone is dropped outside the window, and its writes are
+     ignored;
+   - two presses of reset (driven through the USB adapter's RTS line, which
+     is wired to EN) open the window; a single press doesn't;
+   - a bonded phone connects any time and can open the window for another;
+   - a factory reset forgets all phones.
 3. **Without its network:** `config.json` points at a network that doesn't
    exist. The board runs 90 s without restarting and stays reachable over
    Bluetooth.

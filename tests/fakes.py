@@ -20,6 +20,40 @@ class Reset(Exception):
     """machine.reset() was called."""
 
 
+class DeepSleep(Exception):
+    """machine.deepsleep(ms) was called: the board is off for ms."""
+
+    def __init__(self, ms):
+        super().__init__(ms)
+        self.ms = ms
+
+
+class FakeAHT21:
+    """The AHT21 on I2C (0x38): calibrated, answers measurements with
+    temperature (°C) and humidity (%), with a correct CRC."""
+
+    def __init__(self, temperature, humidity=40.0):
+        self.temperature, self.humidity = temperature, humidity
+        self.measurements = 0
+
+    def write(self, data):
+        if data[:1] == b"\xac":
+            self.measurements += 1
+
+    def read(self, n):
+        if n == 1:
+            return bytes([0x18])   # idle, calibrated
+        h = int(self.humidity / 100 * 1048576)
+        t = int((self.temperature + 50) / 200 * 1048576)
+        d = bytes([0x18, h >> 12 & 0xFF, h >> 4 & 0xFF, (h & 0xF) << 4 | t >> 16 & 0xF, t >> 8 & 0xFF, t & 0xFF])
+        crc = 0xFF
+        for byte in d:
+            crc ^= byte
+            for _ in range(8):
+                crc = (crc << 1 ^ 0x31) & 0xFF if crc & 0x80 else crc << 1 & 0xFF
+        return d + bytes([crc])
+
+
 class Board:
     def __init__(self):
         self.ms = 0                     # time.ticks_ms()
@@ -27,6 +61,7 @@ class Board:
         self.networks = {}              # SSID -> password, in range
         self.ble = None                 # the FakeBLE the firmware created
         self.i2c_devices = {}           # address -> handler (none: no sensors, no display)
+        self.reset_cause = 1            # machine.reset_cause(): PWRON_RESET
 
 
 board = Board()
@@ -134,8 +169,12 @@ def _machine():
 
     m.Pin, m.I2C, m.SoftI2C, m.Timer, m.RTC = Pin, I2C, I2C, Timer, RTC
     m.reset = m.soft_reset = reset
+
+    def deepsleep(ms=0):
+        raise DeepSleep(ms)
+    m.deepsleep = m.lightsleep = deepsleep
     m.freq = lambda *a: 160000000
-    m.reset_cause = lambda: 1
+    m.reset_cause = lambda: board.reset_cause
     m.unique_id = lambda: b"\x01\x02\x03\x04\x05\x06"
     m.PWRON_RESET, m.HARD_RESET, m.WDT_RESET, m.DEEPSLEEP_RESET, m.SOFT_RESET = 1, 2, 3, 4, 5
     return m
@@ -207,6 +246,8 @@ class FakeBLE:
         self.values = {}
         self.irq_handler = None
         self.passkeys = []        # (conn, action, passkey) given to gap_passkey
+        self.security_requests = []   # gap_pair(conn) calls
+        self.disconnects = []
         self.adverts = 0
         board.ble = self
 
@@ -247,10 +288,29 @@ class FakeBLE:
     def gap_passkey(self, conn, action, passkey):
         self.passkeys.append((conn, action, passkey))
 
+    def gap_pair(self, conn):
+        self.security_requests.append(conn)
+
+    def gap_disconnect(self, conn):
+        self.disconnects.append(conn)
+        self.irq_handler(2, (conn, 0, b"\0" * 6))
+
     # helpers for tests: what a phone would do
-    def phone_writes(self, handle, value):
+    def phone_writes(self, handle, value, conn=0):
         self.values[handle] = bytes(value)
-        return self.irq_handler(3, (0, handle))
+        return self.irq_handler(3, (conn, handle))
+
+    def phone_connects(self, conn=0, bond=None, pair_as=None):
+        """A phone connects. bond="known": it encrypts with its existing bond.
+        pair_as=b"key": it pairs anew (Just Works), creating bond keys."""
+        self.irq_handler(1, (conn, 0, b"\x11" * 6))
+        if pair_as is not None:
+            # Like NimBLE: the encryption event first, the new keys stored after it.
+            self.irq_handler(28, (conn, True, False, True, 16))
+            self.irq_handler(30, (2, pair_as, b"peer-keys"))
+            self.irq_handler(30, (1, pair_as, b"our-keys"))
+        elif bond == "known":
+            self.irq_handler(28, (conn, True, False, True, 16))
 
     def flags(self, uuid_short):
         for _, chars in self.services:
