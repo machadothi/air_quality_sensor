@@ -13,7 +13,7 @@ vulnerability* (Security tab of the repository), not as a public issue.
 | Asset | Threat | Protection |
 |---|---|---|
 | Code on the board | a fake update (hostile network, DNS spoofing, a broker user with `/update source`, a compromised GitHub account) | releases are signed with a key that never leaves the release PC; the board checks the signature, then every file's name, size and SHA-256 ([updates.md](docs/updates.md#signed-releases)) |
-| Settings, Wi-Fi, commands over Bluetooth | anyone within ~30 m connecting | every write needs a phone paired with a passkey shown on the board's display (LE Secure Connections); paired phones are remembered, a factory reset forgets them ([bluetooth.md](docs/bluetooth.md#pairing-and-security)) |
+| Settings, Wi-Fi, commands over Bluetooth | anyone within ~30 m connecting | only bonded phones stay connected and can write; pairing (no code, LE Secure Connections) is only possible for 2 minutes after the reset button is pressed twice, or from an already bonded phone; a factory reset forgets all phones ([bluetooth.md](docs/bluetooth.md#pairing-and-security)) |
 | Wi-Fi password sent from the app | sniffing the Bluetooth link | the link is encrypted after pairing |
 | The board running at all | malformed MQTT messages, spoofed weather replies, random Bluetooth writes, a missing network | every input is size-limited and validated; errors drop a connection, never stop the board (tests in `tests/`) |
 | Wi-Fi, broker login in the repository | publishing them | `config.json` is git-ignored and never part of a release; the history was checked |
@@ -34,11 +34,15 @@ vulnerability* (Security tab of the repository), not as a public issue.
   Turn them off with `"bluetooth": {"bthome": false}` if that matters.
 - **Physical access is full access.** Over USB anyone can open the
   MicroPython REPL and read `config.json`, `settings.json` (Wi-Fi and broker
-  passwords) and the pairing keys. The pairing code is also printed on the
-  USB log, for the hardware tests. MicroPython has no flash encryption or
+  passwords) and the pairing keys. MicroPython has no flash encryption or
   secure boot.
-- **A board without a display and without `bluetooth.passkey`** pairs with
-  anyone in range (Just Works). Set a passkey on such boards.
+- **Pairing has no code.** While the pairing window is open (2 minutes after
+  a double press of the reset button, or 10 minutes after start-up while no
+  phone is bonded yet), anyone in range can pair. Open it only when you're
+  pairing your own phone, and check the app shows it paired.
+- **Unpaired phones can connect for a few seconds** before the board drops
+  them (MicroPython can't advertise to bonded phones only). In that time they
+  can read the public readings, the same values BTHome broadcasts.
 - **Weather and location travel over plain HTTP** (Open-Meteo, ip-api.com).
   A spoofed reply can show wrong weather, but every value is checked, so it
   can't do more than that.
