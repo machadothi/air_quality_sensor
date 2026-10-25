@@ -34,7 +34,8 @@ vulnerability* (Security tab of the repository), not as a public issue.
   Turn them off with `"bluetooth": {"bthome": false}` if that matters.
 - **Physical access is full access.** Over USB anyone can open the
   MicroPython REPL and read `config.json`, `settings.json` (Wi-Fi and broker
-  passwords) and the pairing keys. MicroPython has no flash encryption or
+  passwords) and the pairing keys. The pairing code is also printed on the
+  USB log, for the hardware tests. MicroPython has no flash encryption or
   secure boot.
 - **A board without a display and without `bluetooth.passkey`** pairs with
   anyone in range (Just Works). Set a passkey on such boards.

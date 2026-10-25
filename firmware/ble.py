@@ -480,7 +480,8 @@ class Ble:
                 self.pairing_code = self._new_passkey()
                 self._pairing_until = time.ticks_add(time.ticks_ms(), _PAIRING_SHOW_MS)
                 self.ble.gap_passkey(conn, action, self.pairing_code)
-                print("Bluetooth: pairing, code on the display")
+                # Also on the USB log, for the hardware tests (USB access is full access anyway).
+                print("Bluetooth: pairing code %06d" % self.pairing_code)
         elif event == _IRQ_ENCRYPTION_UPDATE:
             _, encrypted, authenticated, bonded, _ = data
             self.pairing_code = None
