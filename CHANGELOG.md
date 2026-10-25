@@ -16,13 +16,19 @@ Each version's section is the release notes the board and the app show
 - "Check now" without Wi-Fi says so instead of restarting the board
 - A bad write from a phone over Bluetooth no longer restarts the board
 
+- Self-heating measurement: the whole board switches off (deep sleep) for
+  5 minutes (`cooldown_min`), and the first temperature after waking gives
+  the offset
+
 Security (see SECURITY.md):
 - Updates must be signed with the release key; the board checks the
   signature and then every file's name, size and SHA-256. Unsigned, altered
   or oversized releases are refused
-- Bluetooth: changing settings needs a phone paired with the 6-digit code the
-  board shows on its display (or a fixed code, `bluetooth.passkey`, for boards
-  without display). Readings stay public. A factory reset forgets paired phones
+- Bluetooth: only bonded phones stay connected and can change settings.
+  Pairing needs no code, but only works in the first 2 minutes after the
+  board starts (reset button or power), 10 while no phone is bonded yet, or
+  after "Add a phone" on a bonded phone.
+  Readings stay public (BTHome). A factory reset forgets paired phones
 - Weather replies, MQTT messages and Bluetooth writes are size-limited and
   validated
 - Fix: with Wi-Fi up but no internet, the place lookup was retried on every

@@ -46,7 +46,7 @@ and their layouts match the Thunderboard firmware's `ble_protocol.h`.
 |---|---|---|---|---|
 | 01 | Env | read, notify (every 2 s) | 27 | Thunderboard layout; only temperature and humidity are filled in (`valid` bits 0 and 1) |
 | 06 | Info | read | 4 | protocol version `1`, board id `0x0C`, sensors `0x41` (bit 0 temperature/humidity, bit 6 air quality), reserved |
-| 07 | Command | write | 1 | `0x02` factory reset, `0x03` reboot, `0x04` identify (the display flashes for 3 s) |
+| 07 | Command | write | 1 | `0x02` factory reset, `0x03` reboot, `0x04` identify (the display flashes for 3 s), `0x06` open the pairing window for 2 minutes (add another phone; `0x05` is the Thunderboard's reset orientation) |
 | 08 | Name | read, write | ≤ 20 | UTF-8; stored, advertised from the next advertising round |
 | 09 | Display | read, write | 7 | `present` (u8), `page_mask` (u16), `page_ms` (u16, 1000–60000), `flags` (u8, bit 0 = rotated 180°), page bits 16–23 (u8). A 5-byte write (Thunderboard clients) leaves the rest as it is. |
 | 0A | **Air** | read, notify (every 2 s) | 22 | see below |
@@ -100,14 +100,14 @@ still works.
 |---|---|---|
 | 0 | i16 | temperature offset in use, °C × 100 |
 | 2 | u8 | automatic daily measurement on (1) / off (0) |
-| 3 | u8 | measurement state: 0 idle, 2 cooling, 3 done, 4 failed |
+| 3 | u8 | measurement state: 0 idle, 2 cooling (about to switch off: the board sleeps `cooldown_min`), 3 done, 4 failed |
 | 4 | u16 | seconds since the measurement started |
 | 6 | u16 | longest cooling time, s |
 | 8 | i16 | warm temperature (uncorrected, before cooling), °C × 100, `0x7FFF` = none |
 | 10 | i16 | current uncorrected temperature, °C × 100 |
 | 12 | i16 | last result, °C × 100, `0x7FFF` = none |
 | 14 | u32 | seconds since the last result, `0xFFFFFFFF` = none |
-| 18 | u8 | why the last run failed: 1 sensor not answering, 2 room temperature changed, 3 cancelled, 4 out of range |
+| 18 | u8 | why the last run failed: 1 sensor not answering, 2 room temperature changed, 3 cancelled, 4 out of range, 5 interrupted (reset or power-off during the sleep) |
 | 19 | u8 | reserved |
 
 Write 2 bytes (`i16` offset × 100) to set the offset, or 4 bytes: offset,
@@ -197,7 +197,6 @@ In `config.json` (all optional):
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | true | false = no Bluetooth at all |
-| `passkey` | `""` | fixed 6-digit pairing code, for a board without display; `""` = a new code on the display each time |
 | `bthome` | true | false = only the app packet |
 | `name` | `""` | `""` = `Air-Monitor-XXXX`; a name set from the app is stored in `settings.json` and wins |
 
@@ -222,38 +221,43 @@ In `config.json` (all optional):
 
 - **Readings are public.** Env, Info, Air and System can be read without
   pairing; BTHome broadcasts the readings anyway.
-- **Everything else needs a paired phone.** That covers every write (Command,
-  Name, Display, Calibration, Time, Wi-Fi, Weather, Update) and reading the
-  Wi-Fi details.
-- **The pairing:**
-  - **Kind:** LE Secure Connections with a **passkey**.
-  - **When:** the BLE Sensor app pairs right after connecting to this board.
-  - **The code:** the board shows a 6-digit code on its display ("Pairing
-    code"), and Android asks for it. Someone nearby can't pair without seeing
-    the display.
-  - **After that:** paired phones are remembered (`ble_bonds.json`), so you
-    pair once per phone.
-  - **Forgetting phones:** a factory reset forgets them all.
-- **Without a display,** set a fixed code in `config.json`:
-  `"bluetooth": {"passkey": "123456"}`. Put it on a label on the board; the
-  phone asks for that code.
-  - **No display and no fixed code:** the link is still encrypted, but the
-    pairing can't be confirmed, so anyone in range can pair ("Just Works").
-    The log says so at start-up.
-- **Linux, `ble-sensor` client:** BlueZ asks for the code. Run
-  `bluetoothctl`, then `pair <address>`, before writing.
+- **Only bonded phones stay connected, and only they can write.** Writes
+  (Command, Name, Display, Calibration, Time, Wi-Fi, Weather, Update) and
+  reading the Wi-Fi details need the encrypted link of a bonded phone.
+- **Pairing needs no code** ("Just Works", LE Secure Connections, encrypted):
+  Android just asks "Pair with Air-Monitor-…?".
+- **But only while the pairing window is open:**
+  - **After every start** (reset button, power, restart): open for the
+    first **2 minutes**. To pair a phone, press the reset button and pair
+    within 2 minutes.
+  - **From a bonded phone:** Command `0x06` ("add a phone") opens it for 2
+    minutes.
+  - **First setup:** while no phone is bonded yet, it's open for 10 minutes
+    after each start.
+  - **While it's open,** the display shows "Pairing open" with the time left,
+    and the app packet's flags byte has bit 0 set, so the app can show "Ready
+    to pair".
+- **After pairing,** the phone is bonded (`ble_bonds.json`) and connects any
+  time without the button. A factory reset forgets all phones.
+- **Home Assistant** needs none of this: the BTHome broadcasts are public.
 
-How it's done in `firmware/ble.py`:
-- **Protected characteristics:** they are registered with
-  `_FLAG_WRITE_AUTHENTICATED` (and `_FLAG_READ_AUTHENTICATED` for Wi-Fi), or
-  with the `_ENCRYPTED` variants in Just Works mode. NimBLE refuses an
-  unpaired write with "insufficient authentication", and the phone then pairs.
-- **The code:** `_IRQ_PASSKEY_ACTION` makes a random code with `os.urandom`
-  and gives it to NimBLE. It's also printed on the USB log
-  (`Bluetooth: pairing code …`), where the hardware tests read it; USB access
-  is full access anyway.
-- **Paired phones:** the bond keys come and go through `_IRQ_SET_SECRET` and
+How "only bonded phones" works, in `firmware/ble.py`:
+- **The check:** MicroPython can't advertise to bonded phones only, so the
+  board stays connectable, but asks every phone that connects to encrypt
+  (a security request, `gap_pair`).
+  - **A bonded phone** encrypts with its keys and is trusted.
+  - **A phone without a bond** is disconnected after 6 seconds; while the
+    window is open, it gets a minute to finish pairing instead.
+  - **A new bond outside the window** is refused, and the phone is
+    disconnected.
+- **Writes** from a phone that isn't trusted (yet) are ignored. The flags
+  already need encryption; this is the bond check on top of it.
+- **The bond keys** come and go through `_IRQ_SET_SECRET` and
   `_IRQ_GET_SECRET`, and are saved outside the callback.
+- **The limit:** a stranger can be connected for those few seconds and read
+  the public readings, the same values BTHome broadcasts.
+- **Linux, `ble-sensor` client:** open the pairing window, then
+  `bluetoothctl` → `pair <address>`, before writing.
 
 ## Limits
 

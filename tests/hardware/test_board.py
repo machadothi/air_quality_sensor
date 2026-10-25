@@ -20,7 +20,7 @@ import pytest
 
 import board as hw
 
-COMMAND, IDENTIFY, FACTORY_RESET = 0x07, b"\x04", b"\x02"
+COMMAND, IDENTIFY, FACTORY_RESET, OPEN_PAIRING = 0x07, b"\x04", b"\x02", b"\x06"
 ENV, AIR = 0x01, 0x0A
 
 
@@ -31,7 +31,7 @@ def test_boots_and_finds_its_sensors(dut):
     mark = dut.restart_app()
     dut.wait_for(r"AHT21 found", 1, since=mark)
     dut.wait_for(r"ENS160 found", 1, since=mark)
-    dut.wait_for(r"Bluetooth: advertising as .*\(pairing with passkey\)", 1, since=mark)
+    dut.wait_for(r"Bluetooth: advertising as ", 1, since=mark)
     time.sleep(20)
     dut.assert_no(r"Traceback|Error|Watchdog", since=mark)
 
@@ -44,37 +44,85 @@ def test_readings_are_public(dut, address):
     assert len(hw.read(address, AIR)) >= 10
 
 
-def test_unpaired_write_is_refused(dut, address):
+def _close_pairing_window(dut):
+    """Restart, then wait out the first 2 minutes (once a phone is bonded)."""
+    mark = dut.restart_app()
+    dut.wait_for(r"pairing window open for 120 s \(after start-up\)", 1, since=mark)
+    dut.wait_for(r"pairing window closed", 130, since=mark)
+    return mark
+
+
+def test_first_setup_opens_the_pairing_window(dut):
+    dut.interrupt()
+    dut.remove_file("ble_bonds.json")         # no phone bonded (restored at the end)
+    mark = dut.restart_app()
+    dut.wait_for(r"pairing window open for 600 s \(no phone paired yet\)", 1, since=mark)
+
+
+def test_pairing_without_code_in_the_window_allows_writes(dut, address):
+    hw.pair(address)
+    mark = dut.mark()
+    hw.write(address, COMMAND, IDENTIFY)
+    dut.wait_for(r"Bluetooth: command 4", 10, since=mark)
+    dut.wait_for(r"new phone paired, link encrypted", 1, since=0)
+
+
+def test_bonded_phone_connects_any_time(dut, address):
+    _close_pairing_window(dut)                # window closed: bonded phones still connect
+    mark = dut.mark()
+    hw.write(address, COMMAND, IDENTIFY)
+    dut.wait_for(r"paired phone, link encrypted", 15, since=mark)
+    dut.wait_for(r"Bluetooth: command 4", 10, since=mark)
+    dut.assert_no(r"not paired", since=mark)
+
+
+def test_unpaired_phone_is_dropped_outside_the_window(dut, address):
+    hw.forget(address)                        # (window still closed) the PC forgets its bond: a stranger
     mark = dut.mark()
     with pytest.raises(Exception):
         hw.write(address, COMMAND, IDENTIFY)
-    time.sleep(2)
+    dut.wait_for(r"phone not paired, disconnected", 15, since=mark)
     dut.assert_no(r"Bluetooth: command 4", since=mark)
 
 
-def test_pairing_with_the_displayed_code_allows_writes(dut, address):
-    hw.pair(address, dut)
+def test_re_pairing_outside_the_window_is_refused(dut, address):
+    """Like someone copying a bonded phone's address: NimBLE deletes the old
+    bond first. The board must keep its bonds, refuse, and keep running (an
+    earlier version made NimBLE loop forever here)."""
+    dut.interrupt()
+    before = dut.read_file("ble_bonds.json")
+    _close_pairing_window(dut)
+    mark = dut.mark()
+    with pytest.raises(Exception):
+        hw.pair(address, timeout=30)
+        hw.write(address, COMMAND, IDENTIFY)
+    dut.wait_for(r"phone not paired, disconnected", 20, since=mark)
+    dut.assert_no(r"Bluetooth: command 4", since=mark)
+    dut.interrupt()                           # still answers
+    assert dut.read_file("ble_bonds.json") == before
+
+
+def test_restart_opens_the_window_again(dut, address):
+    mark = dut.restart_app()
+    dut.wait_for(r"pairing window open for 120 s \(after start-up\)", 1, since=mark)
+    hw.pair(address)                          # the PC pairs again (it forgot its bond above)
     mark = dut.mark()
     hw.write(address, COMMAND, IDENTIFY)
     dut.wait_for(r"Bluetooth: command 4", 10, since=mark)
-    dut.wait_for(r"link encrypted \(authenticated\)", 1, since=0)
 
 
-def test_pairing_survives_a_restart(dut, address):
-    dut.restart_app()
+def test_bonded_phone_can_open_the_window(dut, address):
     mark = dut.mark()
-    hw.write(address, COMMAND, IDENTIFY)
-    dut.wait_for(r"Bluetooth: command 4", 10, since=mark)
-    dut.assert_no(r"pairing code", since=mark)
+    hw.write(address, COMMAND, OPEN_PAIRING)
+    dut.wait_for(r"pairing window open for 120 s \(asked by a paired phone\)", 10, since=mark)
 
 
 def test_factory_reset_forgets_paired_phones(dut, address):
     mark = dut.mark()
     hw.write(address, COMMAND, FACTORY_RESET)
     dut.wait_for(r"^Running$", 60, since=mark)
+    dut.wait_for(r"pairing window open for 600 s \(no phone paired yet\)", 1, since=mark)
     hw.forget(address)              # this PC forgets too, else it would try the old keys
-    with pytest.raises(Exception):
-        hw.write(address, COMMAND, IDENTIFY)
 
 
 # --- without its network --------------------------------------------------------------------

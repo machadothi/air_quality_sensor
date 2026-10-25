@@ -6,23 +6,29 @@
 # Advertising alternates every second between two packets (MicroPython has a
 # single advertising slot):
 #   app packet:    flags | 128-bit service UUID | manufacturer data
-#                  (company 0x02FF, board id 0x0C, protocol version)
+#                  (company 0x02FF, board id 0x0C, protocol version, flags:
+#                  bit 0 = pairing window open)
 #   BTHome packet: flags | service data 0xFCD2: packet id, temperature,
 #                  humidity, dew point, CO2, TVOC
 # The scan response carries the name. While a phone is connected, only the
 # BTHome packet goes out (not connectable), so Home Assistant keeps getting data.
 #
-# Security: readings are public (BTHome broadcasts them anyway), but every
-# write (settings, Wi-Fi, commands, updates) and the Wi-Fi details need a
-# paired phone. Pairing is LE Secure Connections with a 6-digit passkey that
-# the board shows on its display (or a fixed one from config.json, for a board
-# without display) and the user types on the phone: someone nearby can't pair
-# without seeing the display. Paired phones are kept in ble_bonds.json; a
-# factory reset forgets them. Without display and fixed passkey the link is
-# still encrypted, but anyone in range can pair ("Just Works"): docs/bluetooth.md.
+# Security (docs/bluetooth.md#pairing-and-security):
+# - Readings are public: BTHome broadcasts them, for Home Assistant.
+# - Only bonded phones stay connected. Pairing needs no code ("Just Works",
+#   LE Secure Connections, encrypted) but is only possible while the pairing
+#   window is open: the first 2 minutes after every start (reset button or
+#   power), 10 minutes while no phone is bonded yet, or 2 minutes after a
+#   bonded phone's "add a phone" command.
+# - Every phone that connects is asked to encrypt with its bond at once (a
+#   security request). One that can't is disconnected after a few seconds,
+#   unless the window is open; a new bond outside the window is refused.
+#   (MicroPython can't advertise to bonded phones only, so this is how "only
+#   bonded phones can connect" is done.)
+# - Writes and the Wi-Fi details need the encrypted, bonded link.
+# Bonds are kept in ble_bonds.json; a factory reset forgets them.
 import binascii
 import json
-import os
 import struct
 import sys
 import time
@@ -38,23 +44,27 @@ _IRQ_GATTS_WRITE = const(3)
 _IRQ_ENCRYPTION_UPDATE = const(28)
 _IRQ_GET_SECRET = const(29)
 _IRQ_SET_SECRET = const(30)
-_IRQ_PASSKEY_ACTION = const(31)
-_PASSKEY_ACTION_DISPLAY = const(3)
-_IO_DISPLAY_ONLY = const(0)
 _IO_NO_INPUT_OUTPUT = const(3)
+_SECRET_OUR_KEYS = const(1)      # sec_type of bond keys (3 = notification settings)
+_SECRET_PEER_KEYS = const(2)
 
 _FLAG_READ = const(0x0002)
 _FLAG_WRITE = const(0x0008)
 _FLAG_NOTIFY = const(0x0010)
 _FLAG_READ_ENCRYPTED = const(0x0200)
-_FLAG_READ_AUTHENTICATED = const(0x0400)
 _FLAG_WRITE_ENCRYPTED = const(0x1000)
-_FLAG_WRITE_AUTHENTICATED = const(0x2000)
 
 _BONDS_FILE = "ble_bonds.json"
 _BONDS_MAX = const(48)        # stored keys (a few per phone)
 _PENDING_MAX = const(8)       # queued writes; more are dropped
-_PAIRING_SHOW_MS = const(60000)
+PAIRING_WINDOW_S = const(120)   # after every start, and after "add a phone"
+FIRST_PAIRING_S = const(600)    # after start-up, while no phone is bonded yet
+_ASK_AFTER_MS = const(1500)     # ask for encryption only then: a phone pairing by itself goes first
+_SETTLE_MS = const(1000)        # after encryption, wait this long for new bond keys (NimBLE stores
+                                # them after the encryption event) before trusting the link
+_PROVE_MS = const(6000)         # a connected phone must encrypt with its bond within this
+_PAIRING_MS = const(60000)      # ... or, in the window, finish pairing (the user taps "Pair")
+_ADV_PAIRING_OPEN = const(1 << 0)
 
 PROTOCOL_VERSION = const(1)
 BOARD_ID = const(0x0C)            # "ESP32 Air" (Thunderboards are 0x0A/0x0B)
@@ -67,6 +77,7 @@ _ENV_VALID_HUMIDITY = const(1 << 1)
 COMMAND_FACTORY_RESET = const(0x02)
 COMMAND_REBOOT = const(0x03)
 COMMAND_IDENTIFY = const(0x04)
+COMMAND_OPEN_PAIRING = const(0x06)   # from a bonded phone: let another phone pair (0x05 is the Thunderboard's reset orientation)
 
 NAME_MAX = const(20)
 PAGE_MS_MIN = const(1000)
@@ -95,12 +106,11 @@ def _uuid(short):
 _SERVICE_UUID = _uuid(0x00)
 
 
-def _service(authenticated):
-    """The GATT service. Writes, and reading the Wi-Fi details, need a paired
-    link: authenticated (passkey) when the board can show or has a passkey,
-    else at least encrypted."""
-    w = _FLAG_WRITE | (_FLAG_WRITE_AUTHENTICATED if authenticated else _FLAG_WRITE_ENCRYPTED)
-    secret_read = _FLAG_READ | (_FLAG_READ_AUTHENTICATED if authenticated else _FLAG_READ_ENCRYPTED)
+def _service():
+    """The GATT service. Writes, and reading the Wi-Fi details, need the
+    encrypted link of a bonded phone."""
+    w = _FLAG_WRITE | _FLAG_WRITE_ENCRYPTED
+    secret_read = _FLAG_READ | _FLAG_READ_ENCRYPTED
     return (_SERVICE_UUID, (
         (_uuid(0x01), _FLAG_READ | _FLAG_NOTIFY),             # Env
         (_uuid(0x06), _FLAG_READ),                            # Info
@@ -133,20 +143,26 @@ class Ble:
         self.name = cfg["name"] or "Air-Monitor-%02X%02X" % (mac[4], mac[5])
         self.bthome = cfg["bthome"]
         self.ble.config(gap_name=self.name)
-        # Pairing: a passkey the user can see (display or fixed) protects against
-        # someone nearby; without one, Just Works (encrypted, not authenticated).
-        fixed = str(cfg.get("passkey") or "")
-        self.fixed_passkey = int(fixed) if len(fixed) == 6 and fixed.isdigit() else None
-        authenticated = app.display is not None or self.fixed_passkey is not None
-        self.ble.config(bond=True, le_secure=True, mitm=authenticated,
-                        io=_IO_DISPLAY_ONLY if authenticated else _IO_NO_INPUT_OUTPUT)
-        self.pairing_code = None   # shown on the display while a phone pairs
-        self._pairing_until = None
+        # Pairing without a code (Just Works), only while the pairing window is open.
+        self.ble.config(bond=True, le_secure=True, mitm=False, io=_IO_NO_INPUT_OUTPUT)
         self._bonds = self._load_bonds()
         self._bonds_dirty = False
+        self._hidden = set()           # keys NimBLE was told are deleted (see _set_secret)
+        self.pairing_until = None      # ticks when the pairing window closes; None = closed
+        if self.bonded_phones():
+            self.open_pairing(PAIRING_WINDOW_S, "after start-up")
+        else:
+            self.open_pairing(FIRST_PAIRING_S, "no phone paired yet")
+        self.trusted = False           # the connected phone proved its bond (or just bonded in the window)
+        self._connected_at = None
+        self._encrypted_at = None
+        self._dropping = False
+        self._security_asked = False
+        self._new_bond = False         # this connection created bond keys
+        self._kick = False
         ((self.h_env, self.h_info, self.h_command, self.h_name, self.h_display, self.h_air, self.h_system,
           self.h_calibration, self.h_time, self.h_wifi, self.h_weather, self.h_update),) = \
-            self.ble.gatts_register_services((_service(authenticated),))
+            self.ble.gatts_register_services((_service(),))
         self.ble.gatts_set_buffer(self.h_name, NAME_MAX)
         self.ble.gatts_set_buffer(self.h_display, 6)
         self.ble.gatts_set_buffer(self.h_calibration, 20)
@@ -174,8 +190,7 @@ class Ble:
         self.write_time()
         self.write_wifi(notify=False)
         self._update_values(notify=False)
-        print("Bluetooth: advertising as", self.name, "(pairing with passkey)" if authenticated else
-              "(pairing without passkey: no display, no bluetooth.passkey)")
+        print("Bluetooth: advertising as", self.name)
 
     # --- pairing ---------------------------------------------------------------
 
@@ -191,34 +206,67 @@ class Ble:
             json.dump({"%s:%s" % k: v for k, v in self._bonds.items()}, f)
         self._bonds_dirty = False
 
+    def bonded_phones(self):
+        """How many phones are bonded (each has one set of peer keys)."""
+        return sum(1 for t, _ in self._bonds if t == str(_SECRET_PEER_KEYS))
+
+    def pairing_open(self):
+        if self.pairing_until is not None and time.ticks_diff(time.ticks_ms(), self.pairing_until) >= 0:
+            self.pairing_until = None
+            print("Bluetooth: pairing window closed")
+        return self.pairing_until is not None
+
+    def open_pairing(self, seconds, why):
+        self.pairing_until = time.ticks_add(time.ticks_ms(), seconds * 1000)
+        self._next_adv = time.ticks_ms()   # advertise the open window at once
+        print("Bluetooth: pairing window open for %d s (%s)" % (seconds, why))
+
     def _set_secret(self, sec_type, key, value):
+        new_bond = sec_type in (_SECRET_OUR_KEYS, _SECRET_PEER_KEYS)
         key = (str(sec_type), binascii.hexlify(bytes(key)).decode())
         if value is None:
+            # NimBLE deletes a bond before a phone pairs again: only in the window,
+            # else copying a phone's address would wipe the bonds (and reopen the
+            # first-setup window). Outside it the keys are kept but hidden from
+            # NimBLE until this connection ends. NimBLE deletes in a loop until it
+            # hears "not found" (False): so "deleted" once, then "not found", as if
+            # they were gone; anything else makes it loop forever (seen on the
+            # board). The new keys that follow are refused, and that disconnects.
+            if key in self._hidden:
+                return False
+            if new_bond and key in self._bonds and not self.pairing_open():
+                self._hidden.add(key)
+                return True
             if self._bonds.pop(key, None) is None:
                 return False
         else:
+            value = binascii.hexlify(bytes(value)).decode()
+            # New keys, or different keys for an address we know (a phone that
+            # forgot us, or someone copying a bonded phone's address), are a new
+            # pairing: only in the window.
+            if new_bond and self._bonds.get(key) != value:
+                self._new_bond = True
+                if not self.pairing_open():
+                    self._kick = True
+                    return False
             if key not in self._bonds and len(self._bonds) >= _BONDS_MAX:
                 return False
-            self._bonds[key] = binascii.hexlify(bytes(value)).decode()
+            self._bonds[key] = value
         self._bonds_dirty = True   # written to flash in poll(), not in the callback
         return True
 
     def _get_secret(self, sec_type, index, key):
         if key is None:   # the index-th secret of this type
             i = 0
-            for (t, _), value in self._bonds.items():
-                if t == str(sec_type):
+            for k, value in self._bonds.items():
+                if k[0] == str(sec_type) and k not in self._hidden:
                     if i == index:
                         return binascii.unhexlify(value)
                     i += 1
             return None
-        value = self._bonds.get((str(sec_type), binascii.hexlify(bytes(key)).decode()))
+        key = (str(sec_type), binascii.hexlify(bytes(key)).decode())
+        value = None if key in self._hidden else self._bonds.get(key)
         return binascii.unhexlify(value) if value else None
-
-    def _new_passkey(self):
-        if self.fixed_passkey is not None:
-            return self.fixed_passkey
-        return int.from_bytes(os.urandom(4), "big") % 1000000
 
     # --- main loop -------------------------------------------------------------
 
@@ -226,16 +274,17 @@ class Ble:
         now = time.ticks_ms()
         if self._bonds_dirty:
             self._save_bonds()
+        self._check_connection(now)
         display = self.app.display
-        if display:   # the pairing code, while a phone pairs
-            if self.pairing_code is not None and time.ticks_diff(time.ticks_ms(), self._pairing_until) >= 0:
-                self.pairing_code = None
-            notice = None if self.pairing_code is None else (
-                "%03d %03d" % (self.pairing_code // 1000, self.pairing_code % 1000), "Pairing code: type it on the phone")
+        if display:   # the open pairing window, with the time left
+            notice = None
+            if self.pairing_open() and not (self.connection is not None and self.trusted):
+                left = max(0, time.ticks_diff(self.pairing_until, now) // 1000)
+                notice = ("Pairing open", "Pair in the app: %d:%02d left" % (left // 60, left % 60))
             if notice != display.notice:
                 display.notice = notice
                 display.refresh(self.app.air, self.app.net, self.app.history)
-        while self.pending:
+        while self.pending and (self.connection is None or self.trusted):   # held until the bond is checked
             try:   # a bad write from a phone must not stop the board
                 self._handle_write(*self.pending.pop(0))
             except Exception as e:
@@ -424,8 +473,54 @@ class Ble:
     # --- advertising ------------------------------------------------------------
 
     def _app_packet(self):
+        flags = _ADV_PAIRING_OPEN if self.pairing_open() else 0
         return (_ad(0x01, b"\x06") + _ad(0x07, bytes(_SERVICE_UUID))
-                + _ad(0xFF, struct.pack("<HBB", _COMPANY_ID, BOARD_ID, PROTOCOL_VERSION)))
+                + _ad(0xFF, struct.pack("<HBBB", _COMPANY_ID, BOARD_ID, PROTOCOL_VERSION, flags)))
+
+    def _check_connection(self, now):
+        """Only bonded phones stay: ask the new connection to encrypt with its
+        bond, and drop it if it can't (outside the pairing window).
+
+        Encrypted alone isn't enough: a phone pairing anew also ends up
+        encrypted, and NimBLE stores its new keys only after the encryption
+        event. So the link is trusted _SETTLE_MS later, if no new keys came
+        meanwhile, or if they came while the pairing window is open."""
+        conn = self.connection
+        if conn is None or self._dropping:   # (a disconnect takes a moment: don't repeat it)
+            return
+        if self._kick:
+            self._disconnect(conn)
+            return
+        if self.trusted:
+            return
+        if self._encrypted_at is not None and time.ticks_diff(now, self._encrypted_at) >= _SETTLE_MS:
+            if self._new_bond and not self.pairing_open():
+                self._disconnect(conn)
+                return
+            self.trusted = True
+            print("Bluetooth: %s, link encrypted" % ("new phone paired" if self._new_bond else "paired phone"))
+            return
+        if not self._security_asked and time.ticks_diff(now, self._connected_at) >= _ASK_AFTER_MS:
+            self._security_asked = True
+            try:
+                self.ble.gap_pair(conn)   # a bonded phone encrypts; a new one pairs (if allowed)
+            except OSError as e:
+                print("Bluetooth: security request failed:", e)
+        limit = _PAIRING_MS if self.pairing_open() else _PROVE_MS
+        if time.ticks_diff(now, self._connected_at) > limit:
+            self._disconnect(conn)
+
+    def _disconnect(self, conn):
+        self._dropping = True
+        print("Bluetooth: phone not paired, disconnected%s" % (
+            "" if self.pairing_open() else " (restart the board to pair a new phone: 2 minutes)"))
+        self._kick = False
+        self.trusted = False
+        self.pending = []
+        try:
+            self.ble.gap_disconnect(conn)
+        except OSError:
+            pass
 
     def _bthome_packet(self):
         air = self.app.air
@@ -463,30 +558,28 @@ class Ble:
         # Runs in a callback: keep it short, the real work is done in poll().
         if event == _IRQ_CENTRAL_CONNECT:
             self.connection = data[0]
+            self._connected_at = time.ticks_ms()
+            self.trusted = self._security_asked = self._new_bond = self._kick = self._dropping = False
+            self._encrypted_at = None
             self._next_adv = time.ticks_ms()
             print("Bluetooth: phone connected")
         elif event == _IRQ_CENTRAL_DISCONNECT:
             self.connection = None
-            self.pairing_code = None
+            self.trusted = False
+            self.pending = []
+            self._hidden = set()
             self._next_adv = time.ticks_ms()
             print("Bluetooth: phone disconnected")
         elif event == _IRQ_GATTS_WRITE:
             handle = data[1]
             if len(self.pending) < _PENDING_MAX:
                 self.pending.append((handle, bytes(self.ble.gatts_read(handle))))
-        elif event == _IRQ_PASSKEY_ACTION:
-            conn, action, _ = data
-            if action == _PASSKEY_ACTION_DISPLAY:
-                self.pairing_code = self._new_passkey()
-                self._pairing_until = time.ticks_add(time.ticks_ms(), _PAIRING_SHOW_MS)
-                self.ble.gap_passkey(conn, action, self.pairing_code)
-                # Also on the USB log, for the hardware tests (USB access is full access anyway).
-                print("Bluetooth: pairing code %06d" % self.pairing_code)
         elif event == _IRQ_ENCRYPTION_UPDATE:
-            _, encrypted, authenticated, bonded, _ = data
-            self.pairing_code = None
-            print("Bluetooth: link", "encrypted" if encrypted else "not encrypted",
-                  "(authenticated)" if authenticated else "", "(paired)" if bonded else "")
+            _, encrypted, _, bonded, _ = data
+            if encrypted and bonded:
+                self._encrypted_at = time.ticks_ms()   # trusted in poll(), see _check_connection
+            elif not self.pairing_open():   # in the window a failed try may be followed by a pairing
+                self._kick = True
         elif event == _IRQ_GET_SECRET:
             return self._get_secret(*data)
         elif event == _IRQ_SET_SECRET:
@@ -494,6 +587,9 @@ class Ble:
 
     def _handle_write(self, handle, value):
         app = self.app
+        if not self.trusted:   # (the flags already need encryption; this is the bond check)
+            print("Bluetooth: write from a phone that isn't paired, ignored")
+            return
         if handle == self.h_command and value:
             command = value[0]
             print("Bluetooth: command", command)
@@ -503,6 +599,8 @@ class Ble:
                 self.identify_until = time.ticks_add(time.ticks_ms(), 3000)
             elif command == COMMAND_FACTORY_RESET:
                 app.factory_reset()
+            elif command == COMMAND_OPEN_PAIRING:
+                self.open_pairing(PAIRING_WINDOW_S, "asked by a paired phone")
         elif handle == self.h_name:
             try:
                 name = value.decode().strip()

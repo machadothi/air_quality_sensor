@@ -186,14 +186,13 @@ pages and features are skipped meanwhile.
 | `mqtt.device_name` | `Air Monitor` | device name in HA |
 | `pins.<board>.i2c_scl` / `i2c_sda` | 22 / 21 (ESP32), 5 / 4 (ESP8266) | I2C pins |
 | `bluetooth.enabled` / `bthome` / `name` | true / true / "" | ESP32 only, see [bluetooth.md](bluetooth.md#settings) |
-| `bluetooth.passkey` | "" | fixed 6-digit pairing code for a board without display; "" = a new code on the display at each pairing ([bluetooth.md](bluetooth.md#pairing-and-security)) |
 | `pins.<board>.display_reset` | GPIO4 (ESP32), none (ESP8266) | OLED reset pin for 7-pin modules |
 | `sensor.temperature_offset` | 0.0 | °C added to the temperature ([sensors.md](sensors.md#temperature-offset)); settable from the app / `/offset` |
 | `sensor.auto_calibration` | false | measure the offset automatically: nightly at `calibration_hour` (3, local) once the board knows the time, else every `calibration_interval_h` (24) hours (ESP32) |
 | `weather.enabled` / `weather.place` | true / "" | Open-Meteo weather (ESP32); an empty place is found from the internet address (ip-api.com); settable in the app |
 | `time.offset_min` / `time.dst` | 0 / 0 | time zone (minutes from UTC, summer-time rule 0 none, 1 EU, 2 US); set by the app from the phone |
 | `update.auto` | false | install firmware updates without asking (ESP32, [updates.md](updates.md)); switchable in the app |
-| `sensor.cooldown_min` | 20 | longest cooling time of a measurement |
+| `sensor.cooldown_min` | 5 | minutes the board is switched off for a self-heating measurement |
 | `display.enabled` | true | |
 | `display.address` | 0x3C (60) | OLED I2C address |
 | `display.page_s` | 5 | seconds per page |

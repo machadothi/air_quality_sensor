@@ -87,11 +87,10 @@ def load_config():
             "calibration_hour": 3,                  # nightly automatic measurement, local time
             "auto_calibration": False,              # measure the offset automatically (selfcal.py)
             "calibration_interval_h": 24,
-            "cooldown_min": 20,                     # longest cooling period of a measurement
+            "cooldown_min": 5,                      # how long the board is off for a self-heating measurement
         },
         "bluetooth": {                              # ESP32 only, see ble.py
             "enabled": True,
-            "passkey": "",                          # fixed 6-digit pairing code; "" = a new one on the display each time
             "bthome": True,                         # broadcast readings for Home Assistant
             "name": "",                             # "" = Air-Monitor-<last 4 hex digits of the MAC>
         },
@@ -235,7 +234,7 @@ class App:
                        "bluetooth": {"name": bt["name"]},
                        "sensor": {"temperature_offset": self.air.offset,
                                   "auto_calibration": self.cfg["sensor"]["auto_calibration"],
-                                  "last_result": self.selfcal.result if self.selfcal else None}}, f)
+                                  "last_result": self.selfcal.result if self.selfcal else cfg["sensor"].get("last_result")}}, f)
 
     def set_wifi(self, ssid, password):
         """A network chosen in the app; stored in settings.json."""

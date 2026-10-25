@@ -36,6 +36,7 @@ def test_choose_another_network_from_the_app(board, firmware, config, run):
     a = firmware("app").App()
     run(a, 40)
     ble = board.ble
+    ble.phone_connects(pair_as=b"phone")                    # first setup: the window is open
     ble.phone_writes(a.ble.h_wifi, b"\x01")                 # scan, while it still tries "Gone"
     run(a, 5)
     assert b"Home2" in ble.values[a.ble.h_wifi]
