@@ -1,0 +1,27 @@
+# Runs on every push and pull request: the firmware's PC tests (tests/), a
+# lint, and a compile of every module with the board's mpy-cross, which
+# catches syntax MicroPython doesn't accept.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  firmware:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest pyflakes "mpy-cross==1.24.1.post3"
+      - name: Lint
+        run: python -m pyflakes firmware tools tests
+      - name: Compile for MicroPython 1.24
+        run: for f in firmware/*.py; do mpy-cross -O3 -o /tmp/$(basename "$f" .py).mpy "$f"; done
+      - name: Tests
+        run: python -m pytest

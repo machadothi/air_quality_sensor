@@ -20,6 +20,7 @@ _KEEPALIVE_S = 60
 _WIFI_RETRY_MS = 30000
 _MQTT_RETRY_MIN_MS = 5000
 _MQTT_RETRY_MAX_MS = 120000
+_REQUEST_MAX = 512   # longer MQTT requests are ignored
 
 
 class Net:
@@ -165,7 +166,7 @@ class Net:
             if time.ticks_diff(now, self._last_ping) >= _KEEPALIVE_S * 1000 // 2:
                 self.mqtt.ping()
                 self._last_ping = now
-        except OSError as e:
+        except Exception as e:   # OSError, or a malformed/oversized message (MemoryError, IndexError)
             print("MQTT: lost:", e)
             self._drop_mqtt()
 
@@ -242,6 +243,13 @@ class Net:
             return False
 
     def _on_message(self, topic, msg):
-        text = msg.decode().strip()
+        if len(msg) > _REQUEST_MAX:
+            print("MQTT: request too long, ignored")
+            return
+        try:
+            text = msg.decode().strip()
+        except UnicodeError:
+            print("MQTT: request not UTF-8, ignored")
+            return
         print("MQTT: request", text)
         self.publish(self.topic_pub, self.on_request(text))

@@ -186,6 +186,7 @@ pages and features are skipped meanwhile.
 | `mqtt.device_name` | `Air Monitor` | device name in HA |
 | `pins.<board>.i2c_scl` / `i2c_sda` | 22 / 21 (ESP32), 5 / 4 (ESP8266) | I2C pins |
 | `bluetooth.enabled` / `bthome` / `name` | true / true / "" | ESP32 only, see [bluetooth.md](bluetooth.md#settings) |
+| `bluetooth.passkey` | "" | fixed 6-digit pairing code for a board without display; "" = a new code on the display at each pairing ([bluetooth.md](bluetooth.md#pairing-and-security)) |
 | `pins.<board>.display_reset` | GPIO4 (ESP32), none (ESP8266) | OLED reset pin for 7-pin modules |
 | `sensor.temperature_offset` | 0.0 | °C added to the temperature ([sensors.md](sensors.md#temperature-offset)); settable from the app / `/offset` |
 | `sensor.auto_calibration` | false | measure the offset automatically: nightly at `calibration_hour` (3, local) once the board knows the time, else every `calibration_interval_h` (24) hours (ESP32) |

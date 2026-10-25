@@ -15,6 +15,7 @@ The ESP8266 has no Bluetooth; there everything here is simply left out.
 - [BTHome](#bthome)
 - [Settings](#settings)
 - [Trying it](#trying-it)
+- [Pairing and security](#pairing-and-security)
 - [Limits](#limits)
 
 The code is `firmware/ble.py`, started by `app.py` on the ESP32.
@@ -128,7 +129,8 @@ bit 2 online: internet reachable), u8
 count, then per network: u8 name length + name + i8 RSSI (at most 10).
 **Write**: `1` scan (the board blocks ~3 s), `2, len, SSID, len, password`
 connect (stored in `settings.json`), `3` back to `config.json`'s network, `4` /
-`5` MQTT on / off. The password travels unencrypted over Bluetooth.
+`5` MQTT on / off. Writes need a paired phone, so the password travels
+encrypted (see [Pairing and security](#pairing-and-security)).
 
 **Weather** (read): u8 flags (bit 0 on, bit 1 fresh data, bit 2 online), i16
 temperature × 10, i16 feels-like × 10, u8 humidity %, u8 WMO weather code, u8
@@ -195,6 +197,7 @@ In `config.json` (all optional):
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | true | false = no Bluetooth at all |
+| `passkey` | `""` | fixed 6-digit pairing code, for a board without display; `""` = a new code on the display each time |
 | `bthome` | true | false = only the app packet |
 | `name` | `""` | `""` = `Air-Monitor-XXXX`; a name set from the app is stored in `settings.json` and wins |
 
@@ -214,6 +217,41 @@ In `config.json` (all optional):
   ble-sensor -n Air-Monitor-XXXX read        # temperature, humidity, AQI, eCO2, TVOC
   ble-sensor -n Air-Monitor-XXXX display --pages air,temperature --page-time 8
   ```
+
+## Pairing and security
+
+- **Readings are public.** Env, Info, Air and System can be read without
+  pairing; BTHome broadcasts the readings anyway.
+- **Everything else needs a paired phone.** That covers every write (Command,
+  Name, Display, Calibration, Time, Wi-Fi, Weather, Update) and reading the
+  Wi-Fi details.
+- **The pairing:**
+  - **Kind:** LE Secure Connections with a **passkey**.
+  - **When:** the BLE Sensor app pairs right after connecting to this board.
+  - **The code:** the board shows a 6-digit code on its display ("Pairing
+    code"), and Android asks for it. Someone nearby can't pair without seeing
+    the display.
+  - **After that:** paired phones are remembered (`ble_bonds.json`), so you
+    pair once per phone.
+  - **Forgetting phones:** a factory reset forgets them all.
+- **Without a display,** set a fixed code in `config.json`:
+  `"bluetooth": {"passkey": "123456"}`. Put it on a label on the board; the
+  phone asks for that code.
+  - **No display and no fixed code:** the link is still encrypted, but the
+    pairing can't be confirmed, so anyone in range can pair ("Just Works").
+    The log says so at start-up.
+- **Linux, `ble-sensor` client:** BlueZ asks for the code. Run
+  `bluetoothctl`, then `pair <address>`, before writing.
+
+How it's done in `firmware/ble.py`:
+- **Protected characteristics:** they are registered with
+  `_FLAG_WRITE_AUTHENTICATED` (and `_FLAG_READ_AUTHENTICATED` for Wi-Fi), or
+  with the `_ENCRYPTED` variants in Just Works mode. NimBLE refuses an
+  unpaired write with "insufficient authentication", and the phone then pairs.
+- **The code:** `_IRQ_PASSKEY_ACTION` makes a random code with `os.urandom`
+  and gives it to NimBLE.
+- **Paired phones:** the bond keys come and go through `_IRQ_SET_SECRET` and
+  `_IRQ_GET_SECRET`, and are saved outside the callback.
 
 ## Limits
 
