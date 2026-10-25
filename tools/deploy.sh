@@ -56,6 +56,12 @@ fi
 remote "${args[@]}"
 # The ESP8266 firmware has the OLED driver built in; on the ESP32 it is a
 # package from micropython-lib (downloaded by mpremote, needs internet).
-remote exec "import ssd1306" >/dev/null 2>&1 || remote mip install ssd1306
+# The display driver comes from micropython-lib (into /lib). An old copy at the
+# root (e.g. from earlier firmware) would be imported first and lacks rotate():
+# replace it.
+if ! remote exec "import ssd1306; ssd1306.SSD1306.rotate" >/dev/null 2>&1; then
+    remote rm :ssd1306.py >/dev/null 2>&1 || true
+    remote mip install ssd1306
+fi
 remote reset
 echo "Deployed. Log: $MPREMOTE connect $PORT repl   (Ctrl+C stops the program, Ctrl+] quits)"

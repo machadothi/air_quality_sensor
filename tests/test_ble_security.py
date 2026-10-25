@@ -76,6 +76,14 @@ def test_stranger_is_dropped_outside_the_window(board, bonded_app, run):
     assert board.ble.disconnects == [0] and bonded_app.ble.connection is None
 
 
+def test_stranger_is_disconnected_once(board, bonded_app, run, monkeypatch):
+    calls = []
+    monkeypatch.setattr(board.ble, "gap_disconnect", lambda conn: calls.append(conn))   # the phone lingers
+    board.ble.phone_connects()
+    run(bonded_app, 12)
+    assert calls == [0]
+
+
 def test_stranger_cant_pair_outside_the_window(board, bonded_app, run):
     board.ble.phone_connects(pair_as=b"stranger")
     run(bonded_app, 1)

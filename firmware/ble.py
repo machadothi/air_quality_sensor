@@ -165,6 +165,7 @@ class Ble:
         self.trusted = False           # the connected phone proved its bond (or just bonded in the window)
         self._connected_at = None
         self._encrypted_at = None
+        self._dropping = False
         self._security_asked = False
         self._new_bond = False         # this connection created bond keys
         self._kick = False
@@ -494,7 +495,7 @@ class Ble:
         event. So the link is trusted _SETTLE_MS later, if no new keys came
         meanwhile, or if they came while the pairing window is open."""
         conn = self.connection
-        if conn is None:
+        if conn is None or self._dropping:   # (a disconnect takes a moment: don't repeat it)
             return
         if self._kick:
             self._disconnect(conn)
@@ -519,6 +520,7 @@ class Ble:
             self._disconnect(conn)
 
     def _disconnect(self, conn):
+        self._dropping = True
         print("Bluetooth: phone not paired, disconnected%s" % (
             "" if self.pairing_open() else " (press the reset button twice to pair a new phone)"))
         self._kick = False
@@ -566,7 +568,7 @@ class Ble:
         if event == _IRQ_CENTRAL_CONNECT:
             self.connection = data[0]
             self._connected_at = time.ticks_ms()
-            self.trusted = self._security_asked = self._new_bond = self._kick = False
+            self.trusted = self._security_asked = self._new_bond = self._kick = self._dropping = False
             self._encrypted_at = None
             self._next_adv = time.ticks_ms()
             print("Bluetooth: phone connected")
