@@ -45,9 +45,10 @@ def test_readings_are_public(dut, address):
 
 
 def _close_pairing_window(dut):
-    """A single reset: the window stays closed (once a phone is bonded)."""
-    mark = dut.press_reset()
-    dut.wait_for(r"^Running$", 60, since=mark)
+    """Restart, then wait out the first 2 minutes (once a phone is bonded)."""
+    mark = dut.restart_app()
+    dut.wait_for(r"pairing window open for 120 s \(after start-up\)", 1, since=mark)
+    dut.wait_for(r"pairing window closed", 130, since=mark)
     return mark
 
 
@@ -66,9 +67,17 @@ def test_pairing_without_code_in_the_window_allows_writes(dut, address):
     dut.wait_for(r"new phone paired, link encrypted", 1, since=0)
 
 
+def test_bonded_phone_connects_any_time(dut, address):
+    _close_pairing_window(dut)                # window closed: bonded phones still connect
+    mark = dut.mark()
+    hw.write(address, COMMAND, IDENTIFY)
+    dut.wait_for(r"paired phone, link encrypted", 15, since=mark)
+    dut.wait_for(r"Bluetooth: command 4", 10, since=mark)
+    dut.assert_no(r"not paired", since=mark)
+
+
 def test_unpaired_phone_is_dropped_outside_the_window(dut, address):
-    _close_pairing_window(dut)                # the PC is bonded now: no first-setup window
-    hw.forget(address)                        # ... and forgets its bond: a stranger
+    hw.forget(address)                        # (window still closed) the PC forgets its bond: a stranger
     mark = dut.mark()
     with pytest.raises(Exception):
         hw.write(address, COMMAND, IDENTIFY)
@@ -82,7 +91,7 @@ def test_re_pairing_outside_the_window_is_refused(dut, address):
     earlier version made NimBLE loop forever here)."""
     dut.interrupt()
     before = dut.read_file("ble_bonds.json")
-    dut.restart_app()
+    _close_pairing_window(dut)
     mark = dut.mark()
     with pytest.raises(Exception):
         hw.pair(address, timeout=30)
@@ -91,31 +100,15 @@ def test_re_pairing_outside_the_window_is_refused(dut, address):
     dut.assert_no(r"Bluetooth: command 4", since=mark)
     dut.interrupt()                           # still answers
     assert dut.read_file("ble_bonds.json") == before
-    dut.restart_app()
 
 
-def test_double_reset_opens_the_window(dut, address):
-    mark = dut.press_reset(times=2, gap_s=1.5)
-    dut.wait_for(r"pairing window open for 120 s \(reset pressed twice\)", 60, since=mark)
-    hw.pair(address)
+def test_restart_opens_the_window_again(dut, address):
+    mark = dut.restart_app()
+    dut.wait_for(r"pairing window open for 120 s \(after start-up\)", 1, since=mark)
+    hw.pair(address)                          # the PC pairs again (it forgot its bond above)
     mark = dut.mark()
     hw.write(address, COMMAND, IDENTIFY)
     dut.wait_for(r"Bluetooth: command 4", 10, since=mark)
-
-
-def test_single_reset_keeps_it_closed(dut):
-    mark = _close_pairing_window(dut)
-    time.sleep(3)
-    dut.assert_no(r"pairing window open", since=mark)
-
-
-def test_bonded_phone_connects_any_time(dut, address):
-    dut.restart_app()                         # window closed: bonded phones need no button
-    mark = dut.mark()
-    hw.write(address, COMMAND, IDENTIFY)
-    dut.wait_for(r"paired phone, link encrypted", 15, since=mark)
-    dut.wait_for(r"Bluetooth: command 4", 10, since=mark)
-    dut.assert_no(r"not paired", since=mark)
 
 
 def test_bonded_phone_can_open_the_window(dut, address):

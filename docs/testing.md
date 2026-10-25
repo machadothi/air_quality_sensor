@@ -41,7 +41,7 @@ These run the **real firmware**, not copies of it, under CPython.
 |---|---|
 | `test_offline.py` | starting without or with a broken `config.json`; the network gone for 3 minutes; scanning and choosing a network over Bluetooth; no broker; *Check now* without internet |
 | `test_updates.py` | signed vs. tampered, forged or missing signatures; bad file names, sizes and hashes; downloads larger or different than announced; oversized manifests; a whole maintenance check |
-| `test_ble_security.py` | writes need an encrypted, bonded link and readings stay public; the pairing window (first setup, double reset, single reset, "add a phone", closing, on the display); strangers dropped and refused new bonds outside it; bonded phones stay; bonds persisted, bounded and forgotten on factory reset; 300 random writes |
+| `test_ble_security.py` | writes need an encrypted, bonded link and readings stay public; the pairing window (first setup, 2 minutes after every start, "add a phone", closing, on the display); strangers dropped and refused new bonds outside it; bonded phones stay; bonds persisted, bounded and forgotten on factory reset; 300 random writes |
 | `test_selfcal.py` | the self-heating measurement: the board switches off (deep sleep), the first reading after waking gives the offset; reset during the sleep, a warmer room, cancel |
 | `test_untrusted_input.py` | malformed and oversized MQTT messages; MQTT read errors; spoofed weather and location replies; failed lookups spaced out |
 
@@ -85,8 +85,8 @@ and files on its flash. They use Bluetooth from this PC through bleak and
      work afterwards;
    - an unpaired phone is dropped outside the window, and its writes are
      ignored;
-   - two presses of reset (driven through the USB adapter's RTS line, which
-     is wired to EN) open the window; a single press doesn't;
+   - the window closes 2 minutes after a start, and a restart opens it
+     again;
    - a bonded phone connects any time and can open the window for another;
    - a factory reset forgets all phones.
 3. **Without its network:** `config.json` points at a network that doesn't

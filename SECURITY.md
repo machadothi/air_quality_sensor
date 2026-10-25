@@ -13,7 +13,7 @@ vulnerability* (Security tab of the repository), not as a public issue.
 | Asset | Threat | Protection |
 |---|---|---|
 | Code on the board | a fake update (hostile network, DNS spoofing, a broker user with `/update source`, a compromised GitHub account) | releases are signed with a key that never leaves the release PC; the board checks the signature, then every file's name, size and SHA-256 ([updates.md](docs/updates.md#signed-releases)) |
-| Settings, Wi-Fi, commands over Bluetooth | anyone within ~30 m connecting | only bonded phones stay connected and can write; pairing (no code, LE Secure Connections) is only possible for 2 minutes after the reset button is pressed twice, or from an already bonded phone; a factory reset forgets all phones ([bluetooth.md](docs/bluetooth.md#pairing-and-security)) |
+| Settings, Wi-Fi, commands over Bluetooth | anyone within ~30 m connecting | only bonded phones stay connected and can write; pairing (no code, LE Secure Connections) is only possible in the first 2 minutes after the board starts, or from an already bonded phone; a factory reset forgets all phones ([bluetooth.md](docs/bluetooth.md#pairing-and-security)) |
 | Wi-Fi password sent from the app | sniffing the Bluetooth link | the link is encrypted after pairing |
 | The board running at all | malformed MQTT messages, spoofed weather replies, random Bluetooth writes, a missing network | every input is size-limited and validated; errors drop a connection, never stop the board (tests in `tests/`) |
 | Wi-Fi, broker login in the repository | publishing them | `config.json` is git-ignored and never part of a release; the history was checked |
@@ -36,10 +36,11 @@ vulnerability* (Security tab of the repository), not as a public issue.
   MicroPython REPL and read `config.json`, `settings.json` (Wi-Fi and broker
   passwords) and the pairing keys. MicroPython has no flash encryption or
   secure boot.
-- **Pairing has no code.** While the pairing window is open (2 minutes after
-  a double press of the reset button, or 10 minutes after start-up while no
-  phone is bonded yet), anyone in range can pair. Open it only when you're
-  pairing your own phone, and check the app shows it paired.
+- **Pairing has no code.** While the pairing window is open (the first 2
+  minutes after every start, 10 while no phone is bonded yet), anyone in
+  range can pair. That includes starts you didn't cause: a power cut, an
+  update, a crash. Check the app's list of boards now and then, and factory
+  reset the board if a phone you don't know got paired.
 - **Unpaired phones can connect for a few seconds** before the board drops
   them (MicroPython can't advertise to bonded phones only). In that time they
   can read the public readings, the same values BTHome broadcasts.

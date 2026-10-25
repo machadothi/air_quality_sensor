@@ -112,19 +112,6 @@ class Board:
         self._serial.write(b"\x05import machine; machine.reset()\n\x04")
         return mark
 
-    def press_reset(self, times=1, gap_s=1.0):
-        """Presses the reset (EN) button: the USB adapter's RTS line drives EN on
-        these boards (DTR, which drives BOOT/GPIO0, stays released)."""
-        mark = self.mark()
-        for i in range(times):
-            self._serial.dtr = False
-            self._serial.rts = True
-            time.sleep(0.1)
-            self._serial.rts = False
-            if i < times - 1:
-                time.sleep(gap_s)
-        return mark
-
     def restart_app(self, timeout=60):
         mark = self.reset()
         self.wait_for(r"^Running$", timeout, since=mark)

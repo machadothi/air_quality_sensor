@@ -227,9 +227,9 @@ In `config.json` (all optional):
 - **Pairing needs no code** ("Just Works", LE Secure Connections, encrypted):
   Android just asks "Pair with Air-Monitor-…?".
 - **But only while the pairing window is open:**
-  - **Press the reset button twice,** within a few seconds: open for **2
-    minutes**. `boot.py` counts power-on starts; a software restart, a crash
-    or the watchdog doesn't count, so only a finger on the button opens it.
+  - **After every start** (reset button, power, restart): open for the
+    first **2 minutes**. To pair a phone, press the reset button and pair
+    within 2 minutes.
   - **From a bonded phone:** Command `0x06` ("add a phone") opens it for 2
     minutes.
   - **First setup:** while no phone is bonded yet, it's open for 10 minutes

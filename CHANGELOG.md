@@ -24,8 +24,9 @@ Security (see SECURITY.md):
   signature and then every file's name, size and SHA-256. Unsigned, altered
   or oversized releases are refused
 - Bluetooth: only bonded phones stay connected and can change settings.
-  Pairing needs no code, but only works for 2 minutes after the reset button
-  is pressed twice (or from a bonded phone, or while no phone is bonded yet).
+  Pairing needs no code, but only works in the first 2 minutes after the
+  board starts (reset button or power), 10 while no phone is bonded yet, or
+  after "Add a phone" on a bonded phone.
   Readings stay public (BTHome). A factory reset forgets paired phones
 - Weather replies, MQTT messages and Bluetooth writes are size-limited and
   validated

@@ -17,9 +17,9 @@
 # - Readings are public: BTHome broadcasts them, for Home Assistant.
 # - Only bonded phones stay connected. Pairing needs no code ("Just Works",
 #   LE Secure Connections, encrypted) but is only possible while the pairing
-#   window is open: 2 minutes after the reset button is pressed twice (boot.py
-#   counts the presses), from a bonded phone's "add a phone" command, or 10
-#   minutes after start-up while no phone is bonded yet.
+#   window is open: the first 2 minutes after every start (reset button or
+#   power), 10 minutes while no phone is bonded yet, or 2 minutes after a
+#   bonded phone's "add a phone" command.
 # - Every phone that connects is asked to encrypt with its bond at once (a
 #   security request). One that can't is disconnected after a few seconds,
 #   unless the window is open; a new bond outside the window is refused.
@@ -57,7 +57,7 @@ _FLAG_WRITE_ENCRYPTED = const(0x1000)
 _BONDS_FILE = "ble_bonds.json"
 _BONDS_MAX = const(48)        # stored keys (a few per phone)
 _PENDING_MAX = const(8)       # queued writes; more are dropped
-PAIRING_WINDOW_S = const(120)   # after a double press of the reset button
+PAIRING_WINDOW_S = const(120)   # after every start, and after "add a phone"
 FIRST_PAIRING_S = const(600)    # after start-up, while no phone is bonded yet
 _ASK_AFTER_MS = const(1500)     # ask for encryption only then: a phone pairing by itself goes first
 _SETTLE_MS = const(1000)        # after encryption, wait this long for new bond keys (NimBLE stores
@@ -129,15 +129,6 @@ def _service():
 _UNIX_2000 = const(946684800)
 
 
-def _reset_presses():
-    """Reset-button presses in a row, counted by boot.py."""
-    try:
-        with open("/presses") as f:
-            return int(f.read() or 0)
-    except (OSError, ValueError):
-        return 0
-
-
 def _ad(ad_type, payload):
     return bytes((len(payload) + 1, ad_type)) + payload
 
@@ -158,9 +149,9 @@ class Ble:
         self._bonds_dirty = False
         self._hidden = set()           # keys NimBLE was told are deleted (see _set_secret)
         self.pairing_until = None      # ticks when the pairing window closes; None = closed
-        if _reset_presses() >= 2:
-            self.open_pairing(PAIRING_WINDOW_S, "reset pressed twice")
-        elif not self.bonded_phones():
+        if self.bonded_phones():
+            self.open_pairing(PAIRING_WINDOW_S, "after start-up")
+        else:
             self.open_pairing(FIRST_PAIRING_S, "no phone paired yet")
         self.trusted = False           # the connected phone proved its bond (or just bonded in the window)
         self._connected_at = None
@@ -522,7 +513,7 @@ class Ble:
     def _disconnect(self, conn):
         self._dropping = True
         print("Bluetooth: phone not paired, disconnected%s" % (
-            "" if self.pairing_open() else " (press the reset button twice to pair a new phone)"))
+            "" if self.pairing_open() else " (restart the board to pair a new phone: 2 minutes)"))
         self._kick = False
         self.trusted = False
         self.pending = []

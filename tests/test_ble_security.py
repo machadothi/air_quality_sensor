@@ -1,7 +1,7 @@
 """Bluetooth: readings are public (BTHome, for Home Assistant); only bonded
 phones stay connected, and only they can write. Pairing needs no code but is
-only possible while the pairing window is open (security review, pairing
-window)."""
+only possible while the pairing window is open: the first 2 minutes after a
+start (10 while no phone is bonded), or after a bonded phone's "add a phone"."""
 
 import json
 import random
@@ -26,9 +26,18 @@ def app(firmware):
 
 
 @pytest.fixture
-def bonded_app(board, firmware):
+def started_bonded(board, firmware):
+    """A board with a bonded phone, just started: the window is open."""
     bonded_before()
     return firmware("app").App()
+
+
+@pytest.fixture
+def bonded_app(board, started_bonded):
+    """... and running for more than 2 minutes: the window is closed."""
+    board.ms += 121 * 1000
+    assert not started_bonded.ble.pairing_open()
+    return started_bonded
 
 
 def test_flags_writes_need_an_encrypted_bonded_link(board, app):
@@ -47,25 +56,18 @@ def test_first_setup_window_while_no_phone_is_bonded(board, app):
     assert not app.ble.pairing_open()
 
 
-def test_window_closed_once_a_phone_is_bonded(board, bonded_app):
+def test_window_closed_after_the_first_2_minutes(board, bonded_app):
     assert not bonded_app.ble.pairing_open()
     assert bonded_app.ble._app_packet()[-1] == 0                    # advertised: closed
 
 
-def test_double_reset_opens_the_window(board, firmware, monkeypatch):
-    bonded_before()
-    ble = firmware("ble")
-    monkeypatch.setattr(ble, "_reset_presses", lambda: 2)
-    a = firmware("app").App()
+def test_every_start_opens_the_window_for_2_minutes(board, started_bonded):
+    a = started_bonded
     assert a.ble.pairing_open() and a.ble._app_packet()[-1] == 1   # advertised: open
-    board.ms += 121 * 1000
-    assert not a.ble.pairing_open()
-
-
-def test_single_reset_doesnt(board, firmware, monkeypatch):
-    bonded_before()
-    monkeypatch.setattr(firmware("ble"), "_reset_presses", lambda: 1)
-    assert not firmware("app").App().ble.pairing_open()
+    board.ms += 119 * 1000
+    assert a.ble.pairing_open()
+    board.ms += 2 * 1000
+    assert not a.ble.pairing_open() and a.ble._app_packet()[-1] == 0
 
 
 def test_stranger_is_dropped_outside_the_window(board, bonded_app, run):
@@ -118,10 +120,8 @@ def test_bonds_cant_be_deleted_outside_the_window(board, bonded_app, run):
     assert board.ble.irq_handler(29, (2, 0, b"phone-1")) == b"\xaa"   # back after the disconnect
 
 
-def test_failed_try_in_the_window_may_be_followed_by_pairing(board, firmware, monkeypatch, run):
-    bonded_before()
-    monkeypatch.setattr(firmware("ble"), "_reset_presses", lambda: 2)
-    a = firmware("app").App()
+def test_failed_try_in_the_window_may_be_followed_by_pairing(board, started_bonded, run):
+    a = started_bonded
     board.ble.phone_connects()
     board.ble.irq_handler(28, (0, False, False, False, 0))          # its stale keys didn't work
     run(a, 3)
@@ -142,10 +142,8 @@ def test_bonded_phone_stays_and_can_write(board, bonded_app, run):
     assert bonded_app.ble.identify_until != mark
 
 
-def test_new_phone_pairs_in_the_window(board, firmware, monkeypatch, run):
-    bonded_before()
-    monkeypatch.setattr(firmware("ble"), "_reset_presses", lambda: 2)
-    a = firmware("app").App()
+def test_new_phone_pairs_in_the_window(board, started_bonded, run):
+    a = started_bonded
     board.ble.phone_connects(pair_as=b"phone-2")
     run(a, 10)
     assert a.ble.trusted and not board.ble.disconnects and a.ble.bonded_phones() == 2
@@ -165,10 +163,8 @@ def test_bonded_phone_can_open_the_window_for_another(board, bonded_app, run):
     assert bonded_app.ble.pairing_open()
 
 
-def test_display_shows_the_open_window(board, firmware, monkeypatch, run):
-    bonded_before()
-    monkeypatch.setattr(firmware("ble"), "_reset_presses", lambda: 2)
-    a = firmware("app").App()
+def test_display_shows_the_open_window(board, started_bonded, run):
+    a = started_bonded
     run(a, 2)
     assert a.display.notice[0] == "Pairing open" and "left" in a.display.notice[1]
     run(a, 120)
@@ -180,7 +176,8 @@ def test_paired_phones_are_remembered_and_forgotten_on_factory_reset(board, firm
     run(app, 1)
     assert json.load(open("ble_bonds.json"))
     again = firmware("ble").Ble(app)                 # after a restart
-    assert again.bonded_phones() == 1 and not again.pairing_open()
+    assert again.bonded_phones() == 1
+    assert again.pairing_until is not None   # 2 minutes, not the first-setup 10 (a phone is bonded)
     assert board.ble.irq_handler(29, (2, 0, None)) == b"peer-keys"
     app.factory_reset()
     with pytest.raises(OSError):
