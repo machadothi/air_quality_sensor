@@ -86,6 +86,7 @@ class Display:
         self.set_rotate(cfg["rotate"])
         self.back = framebuf.FrameBuffer(bytearray(W * H // 8), W, H, framebuf.MONO_VLSB)
         self.set_pages(cfg["pages"])
+        self.notice = None   # (title, text) shown instead of the pages, e.g. a Bluetooth pairing code
 
     def set_rotate(self, rotate):
         """Turn the picture 180° (True) or back. The driver's rotate(True) is
@@ -114,12 +115,18 @@ class Display:
 
     def refresh(self, air, net, history):
         """Redraw the current page with fresh values."""
+        if self.notice:
+            self.splash(self.notice[1], None, self.notice[0])
+            return
         self._draw(air, net, history)
         self._present()
 
     def next_page(self, air, net, history):
         """Slide the next page in from the right. Pages without data yet (CO2 and
         TVOC while the sensor warms up or is missing) are skipped."""
+        if self.notice:
+            self.refresh(air, net, history)
+            return
         n = len(self.pages)
         for step in range(1, n + 1):
             index = (self.index + step) % n

@@ -45,6 +45,13 @@ _REFRESH_MS = 1000       # redraw the shown page
 _HISTORY_MS = 60000      # one chart point a minute
 _MEMORY_MS = 10000       # track the lowest free RAM
 _WATCHDOG_MS = 120000    # restart if the loop stalls this long
+# ESP32: the hardware watchdog restarts the board if nothing feeds it this long.
+# It's fed from the watchdog timer below, and that runs only through
+# MicroPython's scheduler: a hang inside C (a Bluetooth stack deadlock, a
+# network call that never returns) stops the feeding too. Longest legitimate
+# blocking call in the loop: ~25 s (weather lookups, MQTT connect).
+_HW_WATCHDOG_MS = 60000
+_hw_wdt = None            # machine.WDT, once started it can't be stopped
 _BOOT_WIFI_WAIT_MS = 8000
 
 _display = None          # for the error screen in run()
@@ -87,7 +94,7 @@ def load_config():
             "calibration_hour": 3,                  # nightly automatic measurement, local time
             "auto_calibration": False,              # measure the offset automatically (selfcal.py)
             "calibration_interval_h": 24,
-            "cooldown_min": 20,                     # longest cooling period of a measurement
+            "cooldown_min": 5,                      # how long the board is off for a self-heating measurement
         },
         "bluetooth": {                              # ESP32 only, see ble.py
             "enabled": True,
@@ -151,15 +158,27 @@ def make_i2c(cfg):
     return machine.I2C(0, scl=scl, sda=sda, freq=400000)
 
 
-def _confirm_update():
-    """The new version runs: no rollback (see boot.py)."""
+def _feed_watchdog(_):
+    """After Ctrl+C: keeps the hardware watchdog quiet while the REPL is used."""
+    _hw_wdt.feed()
+
+
+def _confirm_update(root="/"):
+    """The new version runs: no rollback (see boot.py), so the old version's
+    files in /previous/ can go (they'd keep ~70 KB of flash otherwise)."""
     import os
     try:
-        os.remove("/update_trial")
-        from version import VERSION
-        print("Update confirmed:", VERSION)
+        os.remove(root + "update_trial")
+    except OSError:
+        return
+    try:
+        for name in os.listdir(root + "previous"):
+            os.remove(root + "previous/" + name)
+        os.rmdir(root + "previous")
     except OSError:
         pass
+    from version import VERSION
+    print("Update confirmed:", VERSION)
 
 
 def _mean(sums, i):
@@ -179,6 +198,7 @@ class App:
         self._uptime_tick = time.ticks_ms()
         self.reboot_at = None
         self.last_feed = time.ticks_ms()
+        self.stopped = False   # Ctrl+C: back at the REPL
         if PLATFORM == "esp8266":
             machine.freq(160000000)   # smoother display animation (the ESP32 already runs at 160 MHz)
         i2c = make_i2c(cfg)
@@ -234,7 +254,7 @@ class App:
                        "bluetooth": {"name": bt["name"]},
                        "sensor": {"temperature_offset": self.air.offset,
                                   "auto_calibration": self.cfg["sensor"]["auto_calibration"],
-                                  "last_result": self.selfcal.result if self.selfcal else None}}, f)
+                                  "last_result": self.selfcal.result if self.selfcal else cfg["sensor"].get("last_result")}}, f)
 
     def set_wifi(self, ssid, password):
         """A network chosen in the app; stored in settings.json."""
@@ -277,12 +297,13 @@ class App:
         print("Temperature offset:", self.air.offset, "°C")
 
     def factory_reset(self):
-        """Forget settings.json (back to config.json) and restart."""
+        """Forget settings.json (back to config.json) and the paired phones, and restart."""
         import os
-        try:
-            os.remove(SETTINGS_FILE)
-        except OSError:
-            pass
+        for name in (SETTINGS_FILE, "ble_bonds.json"):
+            try:
+                os.remove(name)
+            except OSError:
+                pass
         print("Factory reset")
         self.reboot_at = time.ticks_add(time.ticks_ms(), 500)
 
@@ -386,11 +407,16 @@ class App:
         net.poll()
 
     def _watchdog(self, _):
-        """Timer callback: restart if the loop stopped, e.g. on a hung network
-        call. (The ESP8266's hardware WDT can't be given a timeout this long.)"""
-        if time.ticks_diff(time.ticks_ms(), self.last_feed) > _WATCHDOG_MS:
+        """Timer callback, every 5 s: restart if the loop stopped in Python
+        code; otherwise feed the hardware watchdog, which catches a hang in C
+        (then this callback can't run). Stopped with Ctrl+C: just feed, so the
+        REPL and deploys keep working. (The ESP8266's hardware WDT can't be
+        given a timeout this long: software watchdog only.)"""
+        if not self.stopped and time.ticks_diff(time.ticks_ms(), self.last_feed) > _WATCHDOG_MS:
             print("Watchdog: main loop stuck, restarting")
             machine.reset()
+        if _hw_wdt is not None:
+            _hw_wdt.feed()
 
     def loop(self):
         air, net, display, history = self.air, self.net, self.display, self.history
@@ -403,6 +429,9 @@ class App:
         healthy = False   # 60 s of normal running confirms a fresh update (boot.py)
         timer = machine.Timer(-1 if PLATFORM == "esp8266" else 0)
         timer.init(period=5000, mode=machine.Timer.PERIODIC, callback=self._watchdog)
+        global _hw_wdt
+        if PLATFORM == "esp32" and _hw_wdt is None:
+            _hw_wdt = machine.WDT(timeout=_HW_WATCHDOG_MS)
         print("Running")
         try:
             while True:
@@ -453,8 +482,14 @@ class App:
                     machine.reset()
 
                 time.sleep_ms(20)
+        except KeyboardInterrupt:   # Ctrl+C: a timer stays, feeding the hardware watchdog,
+            self.stopped = True     # but not through self: the app's memory is freed at the REPL
+            if _hw_wdt is not None:
+                timer.init(period=5000, mode=machine.Timer.PERIODIC, callback=_feed_watchdog)
+            raise
         finally:
-            timer.deinit()
+            if not self.stopped:
+                timer.deinit()   # a crash: run() restarts the board (within the hardware watchdog's time)
 
 
 def run():

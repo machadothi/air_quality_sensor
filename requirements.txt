@@ -3,3 +3,7 @@ mpremote              # talk to the board: copy files, REPL, reset
 mpy-cross==1.24.1.post3  # compile to .mpy; must match the board's MicroPython 1.24.x
 esptool               # flash MicroPython itself (only for a new or wiped board)
 pillow                # tools/make_assets.py, preview.py, screenshot.py (also needs fonts-dejavu-core)
+pytest                # tests/: the firmware on the PC with MicroPython fakes
+pyflakes              # lint (CI)
+bleak                 # tests/hardware: Bluetooth from the PC
+pexpect               # tests/hardware: pairing through bluetoothctl

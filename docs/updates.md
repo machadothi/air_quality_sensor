@@ -60,9 +60,41 @@ So a check or an install happens in a short *maintenance start* instead:
 2. `main.py` calls `updater.maintenance()` before loading the app, while all
    the RAM is free.
 3. `maintenance()` connects to Wi-Fi and fetches
-   `https://github.com/machadothi/air_quality_sensor/releases/latest/download/manifest.json`.
+   `https://github.com/machadothi/air_quality_sensor/releases/latest/download/manifest.json`
+   and `manifest.sig`, then [checks the signature](#signed-releases).
    It writes the outcome to `/update_status.json`, which the app shows after
    the restart.
+
+### Signed releases
+
+The board installs only releases signed with **your release key**:
+- **The manifest must be signed.** `manifest.sig` is an RSA-3072 signature
+  (PKCS#1 v1.5, SHA-256) of `manifest.json`.
+- **The board checks it** against the public key in `firmware/release_key.py`
+  (`firmware/signature.py`). An unsigned or altered manifest is refused:
+  "signature invalid: not an official release".
+- **Every file is then checked against the signed manifest:** its name (no
+  paths, never `config.json` or `settings.json`), its exact size, and its
+  SHA-256.
+
+**Why not just HTTPS?** MicroPython's TLS doesn't verify certificates, so HTTPS
+alone wouldn't stop a hostile network or DNS spoofing from serving a fake
+update. With signatures, the connection doesn't have to be trusted at all:
+- Downloads from a test server (`/update source`) are just as safe.
+- A compromised GitHub account can't ship code to the boards either.
+
+**The key** (`tools/signing_key.py`):
+- **Private half:** `~/.config/air_quality_sensor/release-key.pem` (or
+  `$AQS_RELEASE_KEY`), on the PC that builds releases, readable only by you.
+  Never commit it; `.gitignore` refuses `*.pem` and `*.key`.
+- **Public half:** `firmware/release_key.py`, committed.
+- **Keep a copy of the private key offline,** for example on a USB stick:
+  - Lost: boards can't be updated any more, except over USB.
+  - Leaked: anyone can make updates your boards accept. Make a new key, and
+    get its `release_key.py` to the boards with an update signed with the
+    *old* key (or over USB).
+- `tools/signing_key.py show` prints the key's fingerprint and whether it
+  matches `release_key.py`.
 
 The nightly check is skipped while a phone is connected (it would lose the
 link) or a self-heating measurement is running.
@@ -104,13 +136,14 @@ link) or a self-heating measurement is running.
    ```sh
    .venv/bin/python tools/release.py 1.1.0
    ```
-   This does four things:
+   This does the following:
    - writes the version into `firmware/version.py`;
    - compiles every module (the list in `tools/deploy.sh`) with `mpy-cross -O3`;
    - collects them with `assets.bin`, `boot.py` and `main.py` in
      `dist/v1.1.0/`;
    - writes `manifest.json` (version, notes, `.mpy` format, each file's size
-     and SHA-256);
+     and SHA-256) and signs it into `manifest.sig` with your release key
+     (it stops if the key is missing or doesn't match `release_key.py`);
    - writes the release notes to `dist/notes-v1.1.0.md`, for the GitHub release
      page.
 
@@ -148,9 +181,10 @@ cd dist && python3 -m http.server 8000      # serves dist/v1.1.0/ ...
 
 - **The source is stored on the board** (`/update_source`) until you send
   `/update source` without a URL, which goes back to GitHub.
+- **Test releases must be signed too:** `tools/release.py` does it.
 - **To try the rollback,** build a release whose `app.py` raises an exception
   at import (do this in a copy of the repository) and install it.
-- **Watch the log** with `mpremote connect /dev/ttyUSB0 repl`.
+- **Watch the log** with `mpremote connect /dev/ttyUSB0 resume repl`.
 
 ## Files on the board
 

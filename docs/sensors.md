@@ -148,24 +148,34 @@ right next to the board and set the difference: in the app (Settings →
 Calibration), over MQTT (`/offset -2.0`), or in `config.json`
 (`"sensor": {"temperature_offset": -2.0}`).
 
-**Measuring it automatically (ESP32, `firmware/selfcal.py`):** the board
-switches the ENS160's heaters off and watches how far its temperature drops.
-1. **Warm:** the AHT21's uncorrected temperature, averaged over the last minute.
-2. **Cool down:** the ENS160 goes to deep sleep. The firmware waits until the
-   temperature changes by less than 0.03 °C in 3 minutes: at least 10 minutes,
-   at most `cooldown_min` (20).
-3. **Result:** cool minus warm (averaged again) is the offset. It's applied and
-   saved, and the ENS160 measures again after its 3-minute warm-up.
-4. **Rejected runs:** if the temperature *rose*, the room changed during the
-   run, so the result is thrown away ("room temperature changed").
+**Measuring it automatically (ESP32, `firmware/selfcal.py`):** the whole board
+switches off for a while, so nothing heats the AHT21, and its first reading
+afterwards shows how much it read high.
+1. **Warm:** the AHT21's uncorrected temperature, averaged over the last minute,
+   with everything running.
+2. **Off:** everything that heats is switched off, and the board sleeps for
+   `cooldown_min` (5):
+   - the ENS160 goes to sleep (heaters off);
+   - the display switches off;
+   - MQTT signs off, so Home Assistant shows the board unavailable;
+   - the ESP32 goes into deep sleep: no CPU, Wi-Fi or Bluetooth.
+3. **Cool:** the very first AHT21 reading after waking. `main.py` takes it
+   before Wi-Fi, Bluetooth or the app start (`selfcal.wake()`).
+4. **Result:** cool minus warm is the offset. It's applied and saved, and the
+   ENS160 measures again after its 3-minute warm-up.
+5. **Rejected runs:**
+   - **The temperature rose:** the room changed during the run ("room
+     temperature changed").
+   - **The board was reset or lost power while asleep:** the cooling time is
+     unknown ("interrupted").
 
 Start it from the app (Calibration → Measure now) or over MQTT
 (`/calibrate start`). With "Nightly" on (`/calibrate auto on`), it runs once a
 night at `calibration_hour` (03:00 local) when the board knows the time (from
 the internet or the phone), otherwise every `calibration_interval_h` hours
 (24); always only after the ENS160 has run an hour. While it
-runs, the display and the app show "Calibrating", and there are no air
-readings. The result depends on airflow: measure again after moving the board
+runs the board is off: no display, no readings, no Bluetooth (the app loses
+the connection and reconnects after `cooldown_min`). The result depends on airflow: measure again after moving the board
 or putting it in a case.
 
 **Humidity follows.** The same amount of water vapour is a higher relative

@@ -27,6 +27,9 @@ class FrameBuffer:
             self.buf[i] &= ~bit & 0xFF
 
     def fill(self, c):
+        if self.fmt == MONO_VLSB and self.height % 8 == 0:   # fast path: whole bytes
+            self.buf[:] = bytes([0xFF if c else 0]) * len(self.buf)
+            return
         for y in range(self.height):
             for x in range(self.width):
                 self.pixel(x, y, c)
@@ -67,6 +70,12 @@ class FrameBuffer:
                 y0 += sy
 
     def blit(self, src, x, y, key=-1, palette=None):
+        if (key == -1 and palette is None and self.fmt == src.fmt == MONO_VLSB and y % 8 == 0 and src.height % 8 == 0
+                and 0 <= x and x + src.width <= self.width and 0 <= y and y + src.height <= self.height):
+            for page in range(src.height // 8):   # fast path: copy whole byte columns
+                d = (y // 8 + page) * self.width + x
+                self.buf[d:d + src.width] = src.buf[page * src.width:(page + 1) * src.width]
+            return
         for sy in range(src.height):
             for sx in range(src.width):
                 c = src.pixel(sx, sy)
@@ -76,6 +85,16 @@ class FrameBuffer:
                     self.pixel(x + sx, y + sy, c)
 
     def scroll(self, dx, dy):
+        if self.fmt == MONO_VLSB and dy == 0 and self.height % 8 == 0 and abs(dx) < self.width:
+            w = self.width   # fast path: shift each byte row; uncovered pixels stay, as on the board
+            for page in range(self.height // 8):
+                row = self.buf[page * w:(page + 1) * w]
+                if dx > 0:
+                    row[dx:] = row[:w - dx]
+                elif dx < 0:
+                    row[:w + dx] = row[-dx:]
+                self.buf[page * w:(page + 1) * w] = row
+            return
         old = [[self.pixel(x, y) for x in range(self.width)] for y in range(self.height)]
         for y in range(self.height):
             for x in range(self.width):

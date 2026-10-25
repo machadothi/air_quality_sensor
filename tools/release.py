@@ -8,7 +8,9 @@
 3. Collects them with assets.bin, boot.py and main.py in dist/v<version>/,
    with manifest.json: version, release notes (that version's section of
    CHANGELOG.md), .mpy format, and every file's size and SHA-256.
-4. Prints how to publish it as a GitHub release; boards then find it at
+4. Signs manifest.json with the release key (tools/signing_key.py) into
+   manifest.sig; boards refuse a manifest without a valid signature.
+5. Prints how to publish it as a GitHub release; boards then find it at
    https://github.com/machadothi/air_quality_sensor/releases/latest/download/manifest.json
 
 config.json is never part of a release.
@@ -21,6 +23,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import signing_key   # tools/signing_key.py
 
 ROOT = Path(__file__).resolve().parent.parent
 FIRMWARE = ROOT / "firmware"
@@ -46,6 +50,11 @@ def main():
         sys.exit("usage: tools/release.py MAJOR.MINOR.PATCH")
     version = sys.argv[1]
     release_notes = notes(version)
+    key = signing_key.key_path()
+    if not key.exists():
+        sys.exit(f"No signing key at {key}: see tools/signing_key.py")
+    if f"N = 0x{signing_key.modulus(key):x}" not in (FIRMWARE / "release_key.py").read_text():
+        sys.exit("The signing key doesn't match firmware/release_key.py: boards would refuse this release")
     (FIRMWARE / "version.py").write_text(
         "# The firmware version: set by tools/release.py, compared by updater.py.\n"
         f'VERSION = "{version}"\n')
@@ -62,6 +71,7 @@ def main():
              for p in sorted(out.iterdir())]
     manifest = {"version": version, "notes": release_notes, "mpy": MPY_VERSION, "files": files}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1, ensure_ascii=False))
+    signing_key.sign(key, out / "manifest.json", out / "manifest.sig")
     notes_file = out.parent / f"notes-v{version}.md"   # beside the release, not part of it
     notes_file.write_text(release_notes + "\n")
     print(f"Release v{version}: {len(files)} files in {out.relative_to(ROOT)}\n")

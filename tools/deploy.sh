@@ -16,10 +16,10 @@ PORT="${PORT:-/dev/ttyUSB0}"
 BIN="${VENV:-$ROOT/.venv}/bin"
 MPREMOTE="$BIN/mpremote"
 MPY_CROSS="$BIN/mpy-cross"
-MODULES=(app net sensors ui ui_more gfx assets commands home_assistant ble selfcal clock weather updater version)
+MODULES=(app net sensors ui ui_more gfx assets commands home_assistant ble selfcal clock weather updater version signature release_key)
 # Files of the old firmware (esp_manager.py and friends) and stale sources,
 # which would be imported instead of the .mpy files.
-STALE=(esp_manager.py sensor_reader.py modules app.py net.py sensors.py ui.py gfx.py assets.py commands.py home_assistant.py ble.py ui_more.py selfcal.py clock.py weather.py updater.py version.py)
+STALE=(esp_manager.py sensor_reader.py modules app.py net.py sensors.py ui.py gfx.py assets.py commands.py home_assistant.py ble.py ui_more.py selfcal.py clock.py weather.py updater.py version.py signature.py release_key.py)
 
 [ -x "$MPREMOTE" ] && [ -x "$MPY_CROSS" ] || { echo "Missing mpremote/mpy-cross in $BIN, see the top of $0"; exit 1; }
 
@@ -31,7 +31,10 @@ for module in "${MODULES[@]}"; do
 done
 echo "Compiled: ${MODULES[*]}"
 
-remote() { "$MPREMOTE" connect "$PORT" "$@"; }
+# "resume": no soft reset. On the ESP32 the app's hardware watchdog can't be
+# stopped; after Ctrl+C the app keeps feeding it, but a soft reset would stop
+# that and the board would restart 60 s later, maybe in the middle of a copy.
+remote() { "$MPREMOTE" connect "$PORT" resume "$@"; }
 
 # Stop the running program first; retry, since the old firmware could be
 # sleeping and miss the first Ctrl+C.
@@ -56,6 +59,12 @@ fi
 remote "${args[@]}"
 # The ESP8266 firmware has the OLED driver built in; on the ESP32 it is a
 # package from micropython-lib (downloaded by mpremote, needs internet).
-remote exec "import ssd1306" >/dev/null 2>&1 || remote mip install ssd1306
+# The display driver comes from micropython-lib (into /lib). An old copy at the
+# root (e.g. from earlier firmware) would be imported first and lacks rotate():
+# replace it.
+if ! remote exec "import ssd1306; ssd1306.SSD1306.rotate" >/dev/null 2>&1; then
+    remote rm :ssd1306.py >/dev/null 2>&1 || true
+    remote mip install ssd1306
+fi
 remote reset
 echo "Deployed. Log: $MPREMOTE connect $PORT repl   (Ctrl+C stops the program, Ctrl+] quits)"

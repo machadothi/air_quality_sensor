@@ -47,7 +47,7 @@ phone app, and as BTHome to Home Assistant.
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp firmware/config.example.json firmware/config.json     # fill in Wi-Fi + MQTT (git-ignored)
 tools/deploy.sh --config                                 # compile, upload, restart
-.venv/bin/mpremote connect /dev/ttyUSB0 repl             # watch the log (Ctrl+] quits)
+.venv/bin/mpremote connect /dev/ttyUSB0 resume repl             # watch the log (Ctrl+] quits)
 ```
 
 Phone app:
@@ -70,7 +70,9 @@ For a board without MicroPython, the Android SDK, or full details, see
 | [docs/bluetooth.md](docs/bluetooth.md) | Bluetooth on the ESP32: advertising, GATT service, BTHome, the BLE Sensor app |
 | [docs/sensors.md](docs/sensors.md) | how the ENS160 and AHT21 are driven: registers, compensation, warm-up |
 | [docs/display.md](docs/display.md) | the UI, and **how to make a UI like it in Python**: fonts, icons, charts, animation, preview |
-| [docs/updates.md](docs/updates.md) | over-the-air updates, and how to make a release |
+| [docs/updates.md](docs/updates.md) | over-the-air updates, signed releases, and how to make a release |
+| [docs/testing.md](docs/testing.md) | the PC tests with MicroPython fakes, and the hardware tests on a real board |
+| [SECURITY.md](SECURITY.md) | what is protected and how, the known limits, reporting a problem |
 | [docs/android-app.md](docs/android-app.md) | the phone app: screens, build, first start, how it talks to the board |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | when something doesn't work |
 
@@ -90,11 +92,14 @@ firmware/                  everything that runs on the board (MicroPython)
   selfcal.py               self-heating measurement (temperature offset)   (ESP32 only)
   clock.py, weather.py     time (NTP, phone, by hand) and Open-Meteo        (ESP32 only)
   updater.py, version.py   over-the-air updates from GitHub releases        (ESP32 only)
+  signature.py, release_key.py  release signature check, public key          (ESP32 only)
   assets.py, assets.bin    fonts and icons          (generated)
   config.example.json      settings template; your config.json is git-ignored
 tools/                     runs on the PC
   deploy.sh                compile to .mpy, upload, restart
-  release.py               build a release for over-the-air updates (dist/)
+  release.py               build and sign a release for over-the-air updates (dist/)
+  signing_key.py           create / show the release signing key
+tests/                     the firmware on the PC with MicroPython fakes (pytest)
   make_assets.py           generate fonts and icons
   preview.py, sim/         render every screen to PNG without the board
   screenshot.py            capture the real screen from the board
@@ -102,6 +107,33 @@ android/                   the phone app (Kotlin, Compose, MQTT)
 docs/                      documentation
 requirements.txt           PC tools (mpremote, mpy-cross, esptool, Pillow)
 ```
+
+## Tests
+
+```sh
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pytest
+```
+
+`tests/` runs the real firmware on the PC: `tests/fakes.py` stands in for
+MicroPython's hardware modules. The fakes include an ESP32-like Wi-Fi driver,
+Bluetooth, MQTT, and a clock the tests control. The tests cover:
+- offline behaviour;
+- signed updates;
+- Bluetooth pairing and protected writes;
+- malformed network input.
+
+GitHub Actions runs them, a lint and an `mpy-cross` compile on every push and
+pull request (`.github/workflows/tests.yml`).
+
+**On the real board** (`tests/hardware/`, about 10 minutes):
+
+```sh
+.venv/bin/pytest tests/hardware --board /dev/ttyUSB0
+```
+
+See [docs/testing.md](docs/testing.md) for what each suite covers and what
+the hardware tests need.
 
 ## Secrets
 

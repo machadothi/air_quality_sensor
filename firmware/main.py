@@ -6,6 +6,13 @@
 import sys
 import time
 
+try:   # waking from a self-heating measurement: the cool reading, before anything warms the board
+    import selfcal
+    selfcal.wake()
+    del sys.modules["selfcal"]
+except Exception as e:
+    sys.print_exception(e)
+
 try:   # a requested update check or install runs first, with the RAM still free
     import updater
     updater.maintenance()

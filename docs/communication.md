@@ -170,6 +170,16 @@ stops the board. Measuring, the display and Bluetooth (app, BTHome) work as
 usual; MQTT, clock sync, weather and updates wait for a connection, and their
 pages and features are skipped meanwhile.
 
+**Gentle with the network.** A board that can't join its network doesn't keep
+hammering the access point:
+- **Retries back off,** from 30 s, doubling up to 30 minutes between tries.
+- **A refused password** (or a key exchange that never finishes, e.g. a
+  WPA3-only network) waits 10 minutes, and the app shows "wrong password".
+- **The Wi-Fi driver's own retries** are capped at 2; it retries forever by
+  default.
+- **After a successful connection** the backoff starts over at 30 s.
+- **Choosing a network or scanning in the app** tries at once.
+
 | Key | Default | Meaning |
 |---|---|---|
 | `esp` | – | ignored: the board type is detected |
@@ -192,7 +202,7 @@ pages and features are skipped meanwhile.
 | `weather.enabled` / `weather.place` | true / "" | Open-Meteo weather (ESP32); an empty place is found from the internet address (ip-api.com); settable in the app |
 | `time.offset_min` / `time.dst` | 0 / 0 | time zone (minutes from UTC, summer-time rule 0 none, 1 EU, 2 US); set by the app from the phone |
 | `update.auto` | false | install firmware updates without asking (ESP32, [updates.md](updates.md)); switchable in the app |
-| `sensor.cooldown_min` | 20 | longest cooling time of a measurement |
+| `sensor.cooldown_min` | 5 | minutes the board is switched off for a self-heating measurement |
 | `display.enabled` | true | |
 | `display.address` | 0x3C (60) | OLED I2C address |
 | `display.page_s` | 5 | seconds per page |
