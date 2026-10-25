@@ -153,3 +153,21 @@ def test_check_refuses_a_forged_release(board, updater, monkeypatch):
 def test_committed_public_key_is_well_formed(firmware):
     key = firmware("release_key")
     assert key.E == 65537 and 256 ** (key.BYTES - 1) <= key.N < 256 ** key.BYTES and key.BYTES >= 384
+
+
+def test_confirmed_update_frees_the_previous_files(firmware):
+    import os
+    app = firmware("app")
+    os.mkdir("previous")
+    open("previous/app.mpy", "w").write("old")
+    open("update_trial", "w").write("1 9.0.0")
+    app._confirm_update(root="")
+    assert not os.path.exists("previous") and not os.path.exists("update_trial")
+
+
+def test_no_trial_no_cleanup(firmware):
+    import os
+    app = firmware("app")
+    os.mkdir("previous")                       # e.g. a rollback in progress: keep it
+    app._confirm_update(root="")
+    assert os.path.exists("previous")

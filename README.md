@@ -47,7 +47,7 @@ phone app, and as BTHome to Home Assistant.
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp firmware/config.example.json firmware/config.json     # fill in Wi-Fi + MQTT (git-ignored)
 tools/deploy.sh --config                                 # compile, upload, restart
-.venv/bin/mpremote connect /dev/ttyUSB0 repl             # watch the log (Ctrl+] quits)
+.venv/bin/mpremote connect /dev/ttyUSB0 resume repl             # watch the log (Ctrl+] quits)
 ```
 
 Phone app:

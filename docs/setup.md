@@ -96,8 +96,13 @@ Other boards or ports: `PORT=/dev/ttyUSB1 tools/deploy.sh`.
 ## 5. Check it runs
 
 ```sh
-.venv/bin/mpremote connect /dev/ttyUSB0 repl
+.venv/bin/mpremote connect /dev/ttyUSB0 resume repl
 ```
+
+(`resume`: no soft reset when mpremote connects. On the ESP32 the hardware
+watchdog can't be stopped once the app has started it; after Ctrl+C the app
+keeps feeding it, but a soft reset stops that, and the board restarts a
+minute later. `tools/deploy.sh` uses `resume` too.)
 
 After a reset you should see:
 
@@ -112,7 +117,9 @@ Running
 ```
 
 Ctrl+C stops the program (back to `>>>`), Ctrl+] leaves mpremote. To start
-it again: `import app; app.run()` or `.venv/bin/mpremote connect /dev/ttyUSB0 reset`.
+it again: `.venv/bin/mpremote connect /dev/ttyUSB0 reset`. If you use mpremote
+without `resume`, or press Ctrl+D (soft reset), the ESP32 restarts by itself
+about a minute later: that's the hardware watchdog, not a fault.
 
 ## 6. Phone app (optional)
 

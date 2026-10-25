@@ -15,6 +15,17 @@ Each version's section is the release notes the board and the app show
   connection. A network can then be chosen in the app
 - "Check now" without Wi-Fi says so instead of restarting the board
 - A bad write from a phone over Bluetooth no longer restarts the board
+- Fix: a board that couldn't join its network (wrong password, a security
+  mode it can't do) re-joined every ~12 s forever and flooded the router.
+  Retries now back off from 30 s to 30 minutes, a refused password waits 10
+  minutes, and the Wi-Fi driver's own retries are capped. Choosing a network
+  or scanning in the app still tries at once
+- Hardware watchdog (ESP32): a board that hangs anywhere, also inside the
+  Bluetooth or network stack, restarts by itself within a minute (it used to
+  freeze on one display page). The REPL and deploys still work after Ctrl+C
+- Fix: with a display connected, a board that had run older firmware crashed
+  at start-up (an old display driver without rotate()); `tools/deploy.sh`
+  replaces it
 
 - Self-heating measurement: the whole board switches off (deep sleep) for
   5 minutes (`cooldown_min`), and the first temperature after waking gives

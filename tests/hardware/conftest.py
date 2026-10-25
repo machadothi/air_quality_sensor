@@ -33,6 +33,8 @@ def dut(request):
     b.restart_app()
     yield b
     b.restore(saved)
+    for name in ("update_source", "update_status.json", "update_bad", "update_check", "update_install"):
+        b.remove_file(name)         # back to GitHub, no test release state
     b.deploy()                      # undoes test releases installed over the air
     b.restart_app()
     b.close()
@@ -61,3 +63,21 @@ def config_json(dut):
     """The board's config.json as a dict (the app is stopped)."""
     dut.interrupt()
     return json.loads(dut.read_file("config.json") or b"{}")
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """On a failure, attach the board's whole log since the test started."""
+    outcome = yield
+    report = outcome.get_result()
+    dut = item.funcargs.get("dut") if hasattr(item, "funcargs") else None
+    if report.when == "call" and report.failed and dut is not None:
+        report.sections.append(("board log", "\n".join(dut.log(getattr(item, "_log_mark", 0)))))
+
+
+@pytest.fixture(autouse=True)
+def _mark_log(request):
+    dut = request.node.funcargs.get("dut") if "dut" in request.fixturenames else None
+    if dut is not None:
+        request.node._log_mark = dut.mark()
+    yield

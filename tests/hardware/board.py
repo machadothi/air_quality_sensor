@@ -43,15 +43,37 @@ class Board:
         self._serial.close()
 
     def _read(self):
+        """Reads the log; when the USB adapter drops off (it does at some
+        restarts, when the radio starts), it reopens the port once it's back.
+        Use the /dev/serial/by-id/... name: it stays the same, ttyUSBn may not."""
         buf = b""
         while not self._stop:
             try:
                 buf += self._serial.read(512)
-            except serial.SerialException:
-                break
+            except (serial.SerialException, OSError):
+                self.lines.append((time.monotonic(), "[USB adapter dropped off; reopening]"))
+                self._reopen()
+                continue
             while b"\n" in buf:
                 line, buf = buf.split(b"\n", 1)
                 self.lines.append((time.monotonic(), line.decode(errors="replace").rstrip("\r")))
+
+    def _reopen(self):
+        try:
+            self._serial.close()
+        except Exception:
+            pass
+        end = time.monotonic() + 30
+        while not self._stop and time.monotonic() < end:
+            try:
+                port = serial.Serial()
+                port.port, port.baudrate, port.timeout = self.port, 115200, 0.2
+                port.dtr = port.rts = False          # don't reset the board again on opening
+                port.open()
+                self._serial = port
+                return
+            except (serial.SerialException, OSError):
+                time.sleep(0.5)
 
     def mark(self):
         """A point in the log: later waits and greps only look after it."""
@@ -102,6 +124,20 @@ class Board:
         end = max(i for i, t in enumerate(out) if t == "END>>>")
         return out[start + 1:end]
 
+    def fresh_repl(self):
+        """A soft reset in raw-REPL mode: MicroPython starts over without
+        main.py, so the heap is clean (the stopped app's modules fill it). The
+        hardware watchdog isn't fed then: the board restarts within 60 s, so
+        use it only for something short, then restart_app()."""
+        self.interrupt()
+        self._serial.write(b"\x01")
+        time.sleep(0.3)
+        self._serial.write(b"\x04")
+        time.sleep(1.0)
+        self._serial.write(b"\x02")
+        time.sleep(0.5)
+        self.interrupt()
+
     def eval(self, expression, timeout=30):
         return ast.literal_eval(self.exec("print(repr(%s))" % expression, timeout)[-1])
 
@@ -123,8 +159,12 @@ class Board:
         """Contents (bytes), or None if missing. The app must be stopped."""
         return self.eval("open(%r,'rb').read() if %r in __import__('os').listdir() else None" % (name, name))
 
-    def write_file(self, name, data):
-        self.exec("f = open(%r, 'wb')\nf.write(%r)\nf.close()" % (name, bytes(data)))
+    def write_file(self, name, data, chunk=256):
+        """In pieces: a big literal pasted at the REPL can exhaust its memory."""
+        data = bytes(data)
+        self.exec("f = open(%r, 'wb')\nf.close()" % name)
+        for i in range(0, len(data), chunk):
+            self.exec("f = open(%r, 'ab')\nf.write(%r)\nf.close()" % (name, data[i:i + chunk]))
 
     def remove_file(self, name):
         self.exec("import os\ntry:\n    os.remove(%r)\nexcept OSError:\n    pass" % name)
@@ -196,19 +236,28 @@ def forget(address):
     subprocess.run(["bluetoothctl", "remove", address], capture_output=True, timeout=20)
 
 
-def pair(address, timeout=60):
+def pair(address, timeout=60, attempts=3):
     """Pairs and bonds this PC with the board (Just Works, no code). The
-    board's pairing window must be open."""
+    board's pairing window must be open. BlueZ's discovery is flaky (it drops
+    devices from its list mid-scan, "DEL Device ..."): scan, pair as soon as
+    the board is seen, and try again a few times."""
     import pexpect
+    forget(address)   # a refused pairing can leave BlueZ's half behind ("already exists")
     ctl = pexpect.spawn("bluetoothctl", encoding="utf-8", timeout=timeout)
     try:
         ctl.sendline("agent NoInputNoOutput")
         ctl.sendline("default-agent")
-        ctl.sendline("scan on")
-        ctl.expect(address, timeout=30)
-        ctl.sendline("scan off")
-        ctl.sendline("pair %s" % address)
-        ctl.expect(r"Pairing successful")
+        for attempt in range(attempts):
+            ctl.sendline("scan on")
+            ctl.expect(address, timeout=30)
+            ctl.sendline("pair %s" % address)
+            if ctl.expect([r"Pairing successful", r"Failed to pair", pexpect.TIMEOUT], timeout=25) == 0:
+                ctl.sendline("scan off")
+                return
+            ctl.sendline("scan off")
+            ctl.sendline("remove %s" % address)
+            time.sleep(2)
+        raise AssertionError("pairing with %s failed %d times" % (address, attempts))
     finally:
         ctl.sendline("quit")
         ctl.close()

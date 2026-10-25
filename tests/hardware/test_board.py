@@ -81,8 +81,9 @@ def test_unpaired_phone_is_dropped_outside_the_window(dut, address):
     mark = dut.mark()
     with pytest.raises(Exception):
         hw.write(address, COMMAND, IDENTIFY)
-    dut.wait_for(r"phone not paired, disconnected", 15, since=mark)
-    dut.assert_no(r"Bluetooth: command 4", since=mark)
+    # The board drops it after 6 s, unless BlueZ gives up first; either way the write never lands.
+    dut.wait_for(r"Bluetooth: phone disconnected", 15, since=mark)
+    dut.assert_no(r"Bluetooth: command 4|new phone paired|paired phone", since=mark)
 
 
 def test_re_pairing_outside_the_window_is_refused(dut, address):
@@ -129,16 +130,24 @@ def test_factory_reset_forgets_paired_phones(dut, address):
 
 
 def test_runs_without_its_network(dut, address, config_json):
+    settings = dut.read_file("settings.json")
     cfg = dict(config_json, wifi={"ssid": "aqs-test-missing-%d" % random.randrange(10 ** 6), "password": "x"})
-    dut.write_file("config.json", json.dumps(cfg).encode())
-    dut.remove_file("settings.json")          # a network chosen in the app would win
-    mark = dut.restart_app()
-    time.sleep(90)                            # the old firmware restarted after ~40 s
-    dut.assert_no(r"Traceback|Watchdog|restarting|rst:", since=mark)
-    assert hw.find(timeout=15), "not reachable over Bluetooth without Wi-Fi"
-    dut.interrupt()
-    dut.write_file("config.json", json.dumps(config_json).encode())
-    dut.restart_app()
+    try:
+        dut.write_file("config.json", json.dumps(cfg).encode())
+        dut.remove_file("settings.json")      # a network chosen in the app would win
+        dut.restart_app()
+        mark = dut.mark()                     # after the restart we asked for
+        time.sleep(90)                        # the old firmware restarted after ~40 s
+        dut.assert_no(r"Traceback|Watchdog|restarting|rst:", since=mark)
+        assert any(t.startswith("Wi-Fi: not connected; next try in 60 s") for t in dut.log(mark)), \
+            "no backoff between Wi-Fi tries"
+        assert hw.find(timeout=15), "not reachable over Bluetooth without Wi-Fi"
+    finally:                                  # the later tests need the real network
+        dut.interrupt()
+        dut.write_file("config.json", json.dumps(config_json).encode())
+        if settings is not None:
+            dut.write_file("settings.json", settings)
+        dut.restart_app()
 
 
 # --- signed updates ----------------------------------------------------------------------------
@@ -155,7 +164,9 @@ def releases(tmp_path_factory):
     (copy / ".venv").symlink_to(hw.ROOT / ".venv")
     changelog = copy / "CHANGELOG.md"
     for version in ("99.0.0", "99.0.1", "99.0.2"):
-        changelog.write_text("## %s\n\nHardware test release.\n\n" % version + changelog.read_text())
+        text = changelog.read_text()
+        head, _, rest = text.partition("\n## ")          # after the "# Changelog" header
+        changelog.write_text(head + "\n## %s\n\nHardware test release.\n\n## " % version + rest)
         subprocess.run([str(copy / ".venv" / "bin" / "python"), "tools/release.py", version], cwd=copy, check=True,
                        capture_output=True)
     dist = copy / "dist"
@@ -189,10 +200,20 @@ def test_signature_check_on_the_device(dut, releases):
     dut.interrupt()
     data = (releases / "v99.0.0" / "manifest.json").read_bytes()
     sig = (releases / "v99.0.0" / "manifest.sig").read_bytes()
-    out = dut.exec("import time, updater\nt = time.ticks_ms()\nm = updater.check_manifest(%r, %r)\n"
+    dut.write_file("t_manifest.json", data)
+    dut.write_file("t_forged.json", data.replace(b"99.0.0", b"99.0.9"))
+    dut.write_file("t_manifest.sig", sig)
+    # On a real update the check runs in the maintenance start, before the app
+    # loads; a clean interpreter is the same situation (the stopped app's
+    # modules would fill the heap).
+    dut.fresh_repl()
+    out = dut.exec("import time, updater\nr = lambda n: open(n, 'rb').read()\nt = time.ticks_ms()\n"
+                   "m = updater.check_manifest(r('t_manifest.json'), r('t_manifest.sig'))\n"
                    "print(m['version'], time.ticks_diff(time.ticks_ms(), t))\n"
-                   "try:\n    updater.check_manifest(%r, %r)\n    print('forged accepted')\n"
-                   "except OSError as e:\n    print('forged refused:', e)" % (data, sig, data.replace(b"99.0.0", b"99.0.9"), sig))
+                   "try:\n    updater.check_manifest(r('t_forged.json'), r('t_manifest.sig'))\n    print('forged accepted')\n"
+                   "except OSError as e:\n    print('forged refused:', e)")
+    for name in ("t_manifest.json", "t_forged.json", "t_manifest.sig"):
+        dut.remove_file(name)
     version, ms = out[-2].split()
     assert version == "99.0.0" and int(ms) < 2000, out
     assert out[-1].startswith("forged refused: signature invalid"), out

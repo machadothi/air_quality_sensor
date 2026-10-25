@@ -62,6 +62,8 @@ class Board:
         self.ble = None                 # the FakeBLE the firmware created
         self.i2c_devices = {}           # address -> handler (none: no sensors, no display)
         self.reset_cause = 1            # machine.reset_cause(): PWRON_RESET
+        self.wdt_timeout = None         # machine.WDT(timeout=...)
+        self.wdt_feeds = 0
 
 
 board = Board()
@@ -167,7 +169,15 @@ def _machine():
     def reset():
         raise Reset()
 
-    m.Pin, m.I2C, m.SoftI2C, m.Timer, m.RTC = Pin, I2C, I2C, Timer, RTC
+    class WDT:
+        """The hardware watchdog: board.wdt_feeds counts the feeds."""
+        def __init__(self, timeout=5000, id=0):
+            board.wdt_timeout = timeout
+
+        def feed(self):
+            board.wdt_feeds += 1
+
+    m.Pin, m.I2C, m.SoftI2C, m.Timer, m.RTC, m.WDT = Pin, I2C, I2C, Timer, RTC, WDT
     m.reset = m.soft_reset = reset
 
     def deepsleep(ms=0):
@@ -195,6 +205,11 @@ def _network():
         def __init__(self, interface):
             self.requested = self.ok = False
             self.ssid = None
+            self.attempts = 0         # connect() calls that reached the radio
+            self.settings = {}
+
+        def config(self, *args, **kwargs):
+            self.settings.update(kwargs)
 
         def active(self, *a):
             return True
@@ -219,6 +234,7 @@ def _network():
             if self.requested:
                 raise OSError("Wifi Internal Error")
             self.requested, self.ssid = True, ssid
+            self.attempts += 1
             self.ok = board.networks.get(ssid) == password
 
         def disconnect(self):

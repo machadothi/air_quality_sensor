@@ -17,7 +17,16 @@ import network
 from umqtt.simple import MQTTClient, MQTTException
 
 _KEEPALIVE_S = 60
-_WIFI_RETRY_MS = 30000
+# Wi-Fi retries back off, so a board that can't get on a network (wrong
+# password, WPA3-only, out of range) never hammers the access point: each
+# failed attempt doubles the wait, from 30 s up to 30 min; a rejected password
+# waits at least 10 min. The driver's own retries are limited to a couple
+# (it retries forever by default). Choosing a network or scanning in the app
+# tries again right away.
+_WIFI_RETRY_MIN_MS = 30000
+_WIFI_RETRY_MAX_MS = 30 * 60 * 1000
+_WIFI_AUTH_FAIL_MS = 10 * 60 * 1000
+_DRIVER_RECONNECTS = 2
 _MQTT_RETRY_MIN_MS = 5000
 _MQTT_RETRY_MAX_MS = 120000
 _REQUEST_MAX = 512   # longer MQTT requests are ignored
@@ -36,6 +45,12 @@ class Net:
         network.WLAN(network.AP_IF).active(False)
         self.wlan = network.WLAN(network.STA_IF)
         self.wlan.active(True)
+        try:   # ESP32: the driver retries forever unless told otherwise
+            self.wlan.config(reconnects=_DRIVER_RECONNECTS)
+        except (ValueError, OSError, TypeError):   # (the ESP8266 doesn't have it)
+            pass
+        self._wifi_backoff = _WIFI_RETRY_MIN_MS
+        self._auth_noted = False
         self._ssid, self._password = wifi_cfg["ssid"], wifi_cfg["password"]
         self._wifi_retry = time.ticks_ms()
         self.mqtt = None
@@ -77,7 +92,7 @@ class Net:
         status = self.wlan.status()
         if status == network.STAT_CONNECTING:
             return 1, 0
-        if status == getattr(network, "STAT_WRONG_PASSWORD", -1):
+        if self._auth_failed(status):
             return 3, 1
         if status == getattr(network, "STAT_NO_AP_FOUND", -1):
             return 3, 2
@@ -85,11 +100,22 @@ class Net:
             return 0, 0
         return 3, 3
 
-    def _connect(self):
-        """(Re)start connecting. The ESP32 driver keeps retrying by itself and
-        refuses a second connect() meanwhile ("Wifi Internal Error"), so stop it
-        first; and never raise."""
-        self._wifi_retry = time.ticks_add(time.ticks_ms(), _WIFI_RETRY_MS)
+    @staticmethod
+    def _auth_failed(status):
+        """The network refused the password, or the key exchange never finished
+        (wrong password, or a security mode the board can't do, e.g. WPA3-only)."""
+        return status in (getattr(network, "STAT_WRONG_PASSWORD", -1), getattr(network, "STAT_HANDSHAKE_TIMEOUT", -1))
+
+    def _connect(self, now=False):
+        """(Re)start connecting, and schedule the next try with the backoff
+        (now=True: the user asked, start the backoff over). The ESP32 driver
+        refuses a second connect() while it retries ("Wifi Internal Error"), so
+        stop it first; and never raise."""
+        if now:
+            self._wifi_backoff = _WIFI_RETRY_MIN_MS
+        self._wifi_retry = time.ticks_add(time.ticks_ms(), self._wifi_backoff)
+        self._wifi_backoff = min(self._wifi_backoff * 2, _WIFI_RETRY_MAX_MS)
+        self._auth_noted = False
         if not self._ssid:
             if not self._told:
                 self._told = True
@@ -111,7 +137,7 @@ class Net:
         self._ssid, self._password = ssid, password
         self._drop_mqtt()
         self._was_wifi_ok = False
-        self._connect()
+        self._connect(now=True)
 
     def scan(self):
         """Networks in range, strongest first: [(name, rssi)], at most 10.
@@ -130,6 +156,7 @@ class Net:
             found = []
         if not connected:
             self._wifi_retry = time.ticks_ms()   # poll() connects again
+            self._wifi_backoff = _WIFI_RETRY_MIN_MS
         best = {}
         for net in found:
             name = net[0].decode("utf-8", "replace") if net[0] else ""
@@ -146,13 +173,28 @@ class Net:
                 print("Wi-Fi: lost")
                 self._was_wifi_ok = False
             self._drop_mqtt()
-            # The ESP8266 reconnects by itself; only kick it if it gave up.
-            if (time.ticks_diff(now, self._wifi_retry) >= 0
-                    and self.wlan.status() != network.STAT_CONNECTING):
+            status = self.wlan.status()
+            if self._auth_failed(status) and not self._auth_noted:
+                # Retrying soon would only repeat the refused handshake: wait long.
+                self._auth_noted = True
+                self._wifi_backoff = max(self._wifi_backoff, _WIFI_AUTH_FAIL_MS)
+                self._wifi_retry = time.ticks_add(now, max(time.ticks_diff(self._wifi_retry, now), _WIFI_AUTH_FAIL_MS))
+                try:
+                    self.wlan.disconnect()   # stop the driver's own retries too
+                except OSError:
+                    pass
+                print("Wi-Fi: %s refused the password (or its security mode); next try in %d min"
+                      % (self._ssid, _WIFI_AUTH_FAIL_MS // 60000))
+            # Only kick the driver if it gave up (the ESP8266 reconnects by itself).
+            elif time.ticks_diff(now, self._wifi_retry) >= 0 and status != network.STAT_CONNECTING:
+                if self._ssid:
+                    print("Wi-Fi: not connected; next try in %d s" % (self._wifi_backoff // 1000))
                 self._connect()
             return
         if not self._was_wifi_ok:
             self._was_wifi_ok = True
+            self._wifi_backoff = _WIFI_RETRY_MIN_MS   # a later drop starts over at 30 s ...
+            self._wifi_retry = now                     # ... not after an old, long wait
             print("Wi-Fi: connected,", self.ip())
 
         if not self.cfg["enabled"] or not self.cfg["server"]:   # switched off in the app, or no broker set
