@@ -184,7 +184,7 @@ cd dist && python3 -m http.server 8000      # serves dist/v1.1.0/ ...
 - **Test releases must be signed too:** `tools/release.py` does it.
 - **To try the rollback,** build a release whose `app.py` raises an exception
   at import (do this in a copy of the repository) and install it.
-- **Watch the log** with `mpremote connect /dev/ttyUSB0 repl`.
+- **Watch the log** with `mpremote connect /dev/ttyUSB0 resume repl`.
 
 ## Files on the board
 

@@ -1,6 +1,6 @@
 # Troubleshooting
 
-**Watch the log first:** `.venv/bin/mpremote connect /dev/ttyUSB0 repl`, then
+**Watch the log first:** `.venv/bin/mpremote connect /dev/ttyUSB0 resume repl`, then
 reset the board (`Ctrl+D` in the REPL, or the reset button). Ctrl+] leaves.
 
 | Symptom | Cause and fix |
@@ -19,7 +19,8 @@ reset the board (`Ctrl+D` in the REPL, or the reset button). Ctrl+] leaves.
 | Wi-Fi never connects | 2.4 GHz only; check `wifi.ssid`/`password`; `/status` shows the signal (below −80 dBm is weak) |
 | Display ignores `display.pages` in config.json | a choice sent with `/display` is in `settings.json` and wins; delete it: `mpremote fs rm :settings.json` |
 | Tracebacks without line numbers | the code is compiled with `-O3` to save RAM; remove `-O3` in `tools/deploy.sh` while debugging |
-| Board restarts by itself | the log says why: `Watchdog: main loop stuck` or a traceback before `Error ... restarting` |
+| Board restarts by itself | the log says why: `Watchdog: main loop stuck` or a traceback before `Error ... restarting`; a restart with no message before it (`rst:0xc` right after normal lines) is the hardware watchdog: the board hung |
+| The router logs the board joining and leaving every few seconds | an old firmware with a wrong Wi-Fi password: update (1.0.1 backs off), and set the right network in the app |
 | Home Assistant shows duplicates | YAML sensors and discovery both active; remove the YAML ones |
 
 ## Bluetooth (ESP32)

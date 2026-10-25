@@ -170,6 +170,16 @@ stops the board. Measuring, the display and Bluetooth (app, BTHome) work as
 usual; MQTT, clock sync, weather and updates wait for a connection, and their
 pages and features are skipped meanwhile.
 
+**Gentle with the network.** A board that can't join its network doesn't keep
+hammering the access point:
+- **Retries back off,** from 30 s, doubling up to 30 minutes between tries.
+- **A refused password** (or a key exchange that never finishes, e.g. a
+  WPA3-only network) waits 10 minutes, and the app shows "wrong password".
+- **The Wi-Fi driver's own retries** are capped at 2; it retries forever by
+  default.
+- **After a successful connection** the backoff starts over at 30 s.
+- **Choosing a network or scanning in the app** tries at once.
+
 | Key | Default | Meaning |
 |---|---|---|
 | `esp` | – | ignored: the board type is detected |

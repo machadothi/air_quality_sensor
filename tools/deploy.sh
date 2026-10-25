@@ -31,7 +31,10 @@ for module in "${MODULES[@]}"; do
 done
 echo "Compiled: ${MODULES[*]}"
 
-remote() { "$MPREMOTE" connect "$PORT" "$@"; }
+# "resume": no soft reset. On the ESP32 the app's hardware watchdog can't be
+# stopped; after Ctrl+C the app keeps feeding it, but a soft reset would stop
+# that and the board would restart 60 s later, maybe in the middle of a copy.
+remote() { "$MPREMOTE" connect "$PORT" resume "$@"; }
 
 # Stop the running program first; retry, since the old firmware could be
 # sleeping and miss the first Ctrl+C.

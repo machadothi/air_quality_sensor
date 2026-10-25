@@ -96,9 +96,10 @@ Wi-Fi connects (at most 8 s) and moves on regardless.
 | MQTT broker unreachable or refuses | retry after 5 s, doubling up to 2 min |
 | MQTT connection dies | detected on the next publish/ping/check; dropped and reconnected |
 | A sensor stops answering | its values become `null`/"No sensor"; looked for again every 30 s |
-| The loop hangs (e.g. a stuck socket) | the software watchdog (a `Timer` checking every 5 s) resets the board after 120 s |
+| The loop hangs in Python code | the software watchdog (a `Timer` checking every 5 s) resets the board after 120 s |
+| The board hangs in C (a Bluetooth stack deadlock, a call that never returns) | ESP32: the **hardware watchdog** (`machine.WDT`, 60 s) is fed only by that timer, whose callback can't run then: the chip restarts itself |
 | An exception escapes | printed, shown on the display ("Error"), board restarts after 10 s |
-| Ctrl+C (mpremote) | the program stops cleanly, the watchdog timer is stopped, you get the REPL |
+| Ctrl+C (mpremote) | the program stops cleanly and you get the REPL; on the ESP32 the timer keeps feeding the hardware watchdog (it can't be stopped once started), so the REPL and deploys keep working |
 
 ## One code base, two boards
 
