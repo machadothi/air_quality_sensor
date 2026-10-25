@@ -87,7 +87,7 @@ def load_config():
             "calibration_hour": 3,                  # nightly automatic measurement, local time
             "auto_calibration": False,              # measure the offset automatically (selfcal.py)
             "calibration_interval_h": 24,
-            "cooldown_min": 20,                     # longest cooling period of a measurement
+            "cooldown_min": 5,                      # how long the board is off for a self-heating measurement
         },
         "bluetooth": {                              # ESP32 only, see ble.py
             "enabled": True,

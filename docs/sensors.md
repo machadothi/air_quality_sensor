@@ -154,7 +154,7 @@ afterwards shows how much it read high.
 1. **Warm:** the AHT21's uncorrected temperature, averaged over the last minute,
    with everything running.
 2. **Off:** everything that heats is switched off, and the board sleeps for
-   `cooldown_min` (20):
+   `cooldown_min` (5):
    - the ENS160 goes to sleep (heaters off);
    - the display switches off;
    - MQTT signs off, so Home Assistant shows the board unavailable;

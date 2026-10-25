@@ -39,7 +39,7 @@ def wake_up(board, firmware, cool, cause=4):
 
 def test_switches_the_whole_board_off(board, warm_app, run):
     ms = switch_off(warm_app, run)
-    assert ms == 20 * 60 * 1000
+    assert ms == 5 * 60 * 1000
     assert warm_app.air.paused and not warm_app.net.mqtt_ok
     assert json.load(open("selfcal.json")) == {"warm": pytest.approx(24.0)}
 

@@ -192,7 +192,7 @@ pages and features are skipped meanwhile.
 | `weather.enabled` / `weather.place` | true / "" | Open-Meteo weather (ESP32); an empty place is found from the internet address (ip-api.com); settable in the app |
 | `time.offset_min` / `time.dst` | 0 / 0 | time zone (minutes from UTC, summer-time rule 0 none, 1 EU, 2 US); set by the app from the phone |
 | `update.auto` | false | install firmware updates without asking (ESP32, [updates.md](updates.md)); switchable in the app |
-| `sensor.cooldown_min` | 20 | longest cooling time of a measurement |
+| `sensor.cooldown_min` | 5 | minutes the board is switched off for a self-heating measurement |
 | `display.enabled` | true | |
 | `display.address` | 0x3C (60) | OLED I2C address |
 | `display.page_s` | 5 | seconds per page |

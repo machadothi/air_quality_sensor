@@ -17,7 +17,8 @@ Each version's section is the release notes the board and the app show
 - A bad write from a phone over Bluetooth no longer restarts the board
 
 - Self-heating measurement: the whole board switches off (deep sleep) for
-  the cooling time, and the first temperature after waking gives the offset
+  5 minutes (`cooldown_min`), and the first temperature after waking gives
+  the offset
 
 Security (see SECURITY.md):
 - Updates must be signed with the release key; the board checks the
