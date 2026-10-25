@@ -159,9 +159,16 @@ from the phone or by hand.
 ## config.json
 
 On the board (`config.json`) and on the PC (`firmware/config.json`,
-git-ignored). Only `wifi`, `mqtt` (server, client_id, username, password,
-topic_sub, topic_pub) are required; the rest falls back to
-`DEFAULTS` in `firmware/app.py`. Template: `firmware/config.example.json`.
+git-ignored). Nothing is required: whatever is missing falls back to the
+defaults in `load_config()` in `firmware/app.py`. Without `wifi` (or without
+config.json at all) the board runs offline, and the network can be chosen in
+the app; without `mqtt.server` MQTT stays off. Template:
+`firmware/config.example.json`.
+
+**Offline is normal.** No Wi-Fi, a network out of range, or no internet never
+stops the board. Measuring, the display and Bluetooth (app, BTHome) work as
+usual; MQTT, clock sync, weather and updates wait for a connection, and their
+pages and features are skipped meanwhile.
 
 | Key | Default | Meaning |
 |---|---|---|

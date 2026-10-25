@@ -3,6 +3,19 @@
 Each version's section is the release notes the board and the app show
 (`tools/release.py` copies it into the release's `manifest.json`).
 
+## 1.0.1
+
+- Fix: the board restarted over and over when its Wi-Fi network wasn't
+  available (or none was set), so Bluetooth was unusable and no other network
+  could be chosen from the app. Wi-Fi errors no longer stop the board, and
+  "Choose network" works while it's still trying to connect
+- Works fully offline: without Wi-Fi, a network, a broker or even a
+  config.json, the board measures, shows and talks Bluetooth as usual; only
+  the internet features (MQTT, clock sync, weather, updates) wait for a
+  connection. A network can then be chosen in the app
+- "Check now" without Wi-Fi says so instead of restarting the board
+- A bad write from a phone over Bluetooth no longer restarts the board
+
 ## 1.0.0
 
 First release.

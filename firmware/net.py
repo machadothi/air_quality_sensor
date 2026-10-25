@@ -1,5 +1,7 @@
 # Wi-Fi and MQTT, kept alive from the main loop: call poll() often. Nothing in
-# here waits for the network, so the display keeps running while it is down.
+# here waits for the network, so the display keeps running while it is down,
+# and no Wi-Fi call may raise: a missing network must never stop the board
+# (the app is how you pick another one).
 #
 # MQTT topics (names from config.json):
 #   <topic_state>          readings as JSON, every publish_s, retained (default esp/air_quality_sensor)
@@ -40,8 +42,8 @@ class Net:
         self._mqtt_backoff = _MQTT_RETRY_MIN_MS
         self._last_ping = 0
         self._was_wifi_ok = False
-        print("Wi-Fi: connecting to", self._ssid)
-        self.wlan.connect(self._ssid, self._password)
+        self._told = False   # "no network set" printed
+        self._connect()
 
     # --- state -------------------------------------------------------------------
 
@@ -82,24 +84,53 @@ class Net:
             return 0, 0
         return 3, 3
 
+    def _connect(self):
+        """(Re)start connecting. The ESP32 driver keeps retrying by itself and
+        refuses a second connect() meanwhile ("Wifi Internal Error"), so stop it
+        first; and never raise."""
+        self._wifi_retry = time.ticks_add(time.ticks_ms(), _WIFI_RETRY_MS)
+        if not self._ssid:
+            if not self._told:
+                self._told = True
+                print("Wi-Fi: no network set; choose one in the app")
+            return
+        try:
+            self.wlan.disconnect()
+        except OSError:
+            pass
+        try:
+            print("Wi-Fi: connecting to", self._ssid)
+            self.wlan.connect(self._ssid, self._password)
+        except OSError as e:
+            print("Wi-Fi: connect failed:", e)
+
     def set_wifi(self, ssid, password):
         """Switch to another network (from the app)."""
         print("Wi-Fi: switching to", ssid)
         self._ssid, self._password = ssid, password
         self._drop_mqtt()
-        try:
-            self.wlan.disconnect()
-        except OSError:
-            pass
-        self.wlan.connect(ssid, password)
-        self._wifi_retry = time.ticks_add(time.ticks_ms(), 30000)
         self._was_wifi_ok = False
+        self._connect()
 
     def scan(self):
         """Networks in range, strongest first: [(name, rssi)], at most 10.
-        Blocks for about 3 s."""
+        Blocks for about 3 s. While not connected, the attempts to connect are
+        paused (the ESP32 can't scan meanwhile) and resumed right after."""
+        connected = self.wlan.isconnected()
+        if not connected:
+            try:
+                self.wlan.disconnect()
+            except OSError:
+                pass
+        try:
+            found = self.wlan.scan()
+        except OSError as e:
+            print("Wi-Fi: scan failed:", e)
+            found = []
+        if not connected:
+            self._wifi_retry = time.ticks_ms()   # poll() connects again
         best = {}
-        for net in self.wlan.scan():
+        for net in found:
             name = net[0].decode("utf-8", "replace") if net[0] else ""
             if name and (name not in best or net[3] > best[name]):
                 best[name] = net[3]
@@ -117,14 +148,13 @@ class Net:
             # The ESP8266 reconnects by itself; only kick it if it gave up.
             if (time.ticks_diff(now, self._wifi_retry) >= 0
                     and self.wlan.status() != network.STAT_CONNECTING):
-                self._wifi_retry = time.ticks_add(now, _WIFI_RETRY_MS)
-                self.wlan.connect(self._ssid, self._password)
+                self._connect()
             return
         if not self._was_wifi_ok:
             self._was_wifi_ok = True
             print("Wi-Fi: connected,", self.ip())
 
-        if not self.cfg["enabled"]:   # switched off in the app
+        if not self.cfg["enabled"] or not self.cfg["server"]:   # switched off in the app, or no broker set
             return
         if self.mqtt is None:
             if time.ticks_diff(now, self._mqtt_retry) >= 0:
@@ -150,7 +180,7 @@ class Net:
         cfg = self.cfg
         print("MQTT: connecting to", cfg["server"])
         client = MQTTClient(cfg["client_id"], cfg["server"], port=cfg["port"],
-                            user=cfg["username"], password=cfg["password"],
+                            user=cfg["username"] or None, password=cfg["password"] or None,
                             keepalive=_KEEPALIVE_S)
         client.set_callback(self._on_message)
         client.set_last_will(self.topic_availability, b"offline", retain=True)
