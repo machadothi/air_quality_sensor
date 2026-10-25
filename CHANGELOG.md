@@ -5,6 +5,9 @@ Each version's section is the release notes the board and the app show
 
 ## 1.0.1
 
+Pairing without a code, signed updates, works offline, gentler on Wi-Fi,
+restarts itself if it hangs.
+
 - Fix: the board restarted over and over when its Wi-Fi network wasn't
   available (or none was set), so Bluetooth was unusable and no other network
   could be chosen from the app. Wi-Fi errors no longer stop the board, and
